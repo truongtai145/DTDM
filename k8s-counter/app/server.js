@@ -41,6 +41,30 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ ok: true }));
     return;
   }
+    if (req.url === '/health') {
+    res.writeHead(200);
+    res.end('OK');
+    return;
+  }
+
+  // Self-Healing Demo
+  if (req.url === '/crash') {
+    console.log('Pod crashed intentionally!');
+    process.exit(1);
+  }
+
+  // Auto Scaling Demo
+  if (req.url === '/stress') {
+    const start = Date.now();
+
+    while (Date.now() - start < 10000) {
+      Math.sqrt(Math.random());
+    }
+
+    res.writeHead(200);
+    res.end('CPU Stress Completed');
+    return;
+  }
 
   // Serve HTML
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -340,6 +364,13 @@ const HTML = `<!DOCTYPE html>
     </div>
 
     <button class="btn-hit" onclick="hit()">[ NHẤN ĐỂ TĂNG ĐẾM ] +1</button>
+    <button class="btn-hit" onclick="stress()">
+  TEST AUTO SCALING
+</button>
+
+<button class="btn-reset" onclick="crashPod()">
+  TEST SELF-HEALING
+</button>
 
     <div class="info-grid">
       <div class="info-card">
@@ -412,6 +443,19 @@ const HTML = `<!DOCTYPE html>
       document.getElementById('count').textContent = '0';
       document.getElementById('pod-visits').textContent = '0';
     }
+      async function stress() {
+  document.getElementById('status-text').textContent =
+    'Generating CPU load...';
+
+  await fetch('/stress');
+
+  document.getElementById('status-text').textContent =
+    'CPU stress completed';
+}
+
+async function crashPod() {
+  await fetch('/crash');
+}
 
     // Load count on start
     hit();
