@@ -1,0 +1,21 @@
+# ─── HPA: Auto-Scaling theo CPU ────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: counter-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: counter-deployment
+
+  minReplicas: 3      # Luôn có tối thiểu 3 Pod
+  maxReplicas: 30    # Scale tối đa 30 Pod khi tải cao
+
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50   # CPU > 50% → scale up

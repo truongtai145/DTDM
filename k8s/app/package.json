@@ -1,0 +1,9 @@
+{
+  "name": "k8s-counter-pro",
+  "version": "2.0.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "redis": "^4.6.0"
+  }
+}

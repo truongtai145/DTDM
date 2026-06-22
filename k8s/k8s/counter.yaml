@@ -1,0 +1,63 @@
+# ─── Declarative Config: khai báo trạng thái mong muốn ─────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: counter-deployment
+spec:
+  replicas: 3                    # K8s LUÔN duy trì đúng 3 Pod
+  selector:
+    matchLabels:
+      app: counter
+  template:
+    metadata:
+      labels:
+        app: counter
+    spec:
+      containers:
+      - name: counter
+        image: k8s-counter:2.0   # Phải trùng tag lúc build
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 3000
+        env:
+        - name: REDIS_HOST
+          value: "redis-service"
+        resources:
+          requests:
+            cpu: "100m"           # HPA tính % dựa vào số này
+            memory: "64Mi"
+          limits:
+            cpu: "300m"
+            memory: "128Mi"
+
+        # ── Self-Healing: phát hiện Pod chết để restart ────────────
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          failureThreshold: 3    # Fail 3 lần liên tục → K8s restart Pod
+
+        # ── Load Balancing: chỉ gửi traffic khi Pod đã sẵn sàng ────
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          failureThreshold: 2    # Fail 2 lần → tạm rút khỏi Service pool
+---
+# ─── Service: load balancing + service discovery ───────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: counter-service
+spec:
+  type: NodePort
+  selector:
+    app: counter            # Tự động tìm mọi Pod có label này
+  ports:
+  - port: 80
+    targetPort: 3000
+    nodePort: 30080
