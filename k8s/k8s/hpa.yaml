@@ -10,7 +10,7 @@ spec:
     name: counter-deployment
 
   minReplicas: 3      # Luôn có tối thiểu 3 Pod
-  maxReplicas: 30    # Scale tối đa 30 Pod khi tải cao
+  maxReplicas: 10    # Scale tối đa 10 Pod khi tải cao
 
   metrics:
   - type: Resource
