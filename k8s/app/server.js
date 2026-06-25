@@ -229,9 +229,9 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <h1>☸ Kubernetes — Flash Sale Demo</h1>
     <p>Website thương mại điện tử | Mô phỏng 4 tính chất cốt lõi của Kubernetes</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-      <span class="k8s-badge"><span class="live-dot"></span> Cluster đang chạy</span>
-      <span class="k8s-badge"> Redis: shared state</span>
-      <span class="k8s-badge">⚙ HPA: min 3 / max 10</span>
+      <span class="k8s-badge"><span class="live-dot"></span> Cluster </span>
+      <span class="k8s-badge"> Redis</span>
+      <span class="k8s-badge">⚙ HPA</span>
     </div>
   </div>
 </div>
@@ -259,7 +259,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 </div>
 
 <div class="g2" style="margin-bottom:16px;">
-  <div class="stat-card"><div class="stat-label">Tổng Requests</div><div class="stat-value" id="total-req">0</div><div class="stat-sub">Lưu trong Redis (shared state)</div></div>
+  <div class="stat-card"><div class="stat-label">Tổng Requests</div><div class="stat-value" id="total-req">0</div><div class="stat-sub"></div></div>
   <div class="stat-card"><div class="stat-label">Pods Đang Chạy</div><div class="stat-value" id="pod-count-val" style="color:var(--green)">3</div><div class="stat-sub">Kubernetes duy trì tự động</div></div>
 </div>
 
@@ -271,60 +271,72 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">1</div>
     <div>
       <div class="section-title">Quản Lý Khai Báo (Declarative Configuration)</div>
-      <div class="section-sub">DevOps viết file YAML → K8s tự quản lý — không cần ra lệnh thủ công</div>
+     
     </div>
   </div>
 
   
 
-  <div class="g2">
+  <!-- Cấu hình khai báo — dạng thẻ gọn -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+    <!-- TRÁI: Desired State từ YAML -->
     <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:6px;">FILE YAML — DevOps khai báo</div>
-      <div class="yaml-box">
-        <span class="yaml-live">LIVE</span>
-        <span class="c">---</span><br>
-        <span class="k">kind:</span> <span class="v">Deployment</span><br>
-        <span class="k">metadata:</span><br>
-        &nbsp;&nbsp;<span class="k">name:</span> <span class="v">shop-api</span><br>
-        <span class="k">spec:</span><br>
-        &nbsp;&nbsp;<span class="k">replicas:</span> <span class="n" id="yaml-replicas">3</span>&nbsp;&nbsp;<span class="c"># K8s giữ đúng số này</span><br>
-        &nbsp;&nbsp;<span class="k">selector:</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="k">matchLabels:</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">app:</span> <span class="v">shop-api</span><br>
-        &nbsp;&nbsp;<span class="k">template:</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="k">spec:</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">containers:</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">- image:</span> <span class="v">shop-api:2.1</span><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">resources.requests.cpu:</span> <span class="n">100m</span><br>
-        <br>
-        <span class="c">---</span><br>
-        <span class="k">kind:</span> <span class="v">HorizontalPodAutoscaler</span><br>
-        &nbsp;&nbsp;<span class="k">minReplicas:</span> <span class="n">3</span><br>
-        &nbsp;&nbsp;<span class="k">maxReplicas:</span> <span class="n">15</span><br>
-        &nbsp;&nbsp;<span class="k">targetCPU:</span> <span class="n">50%</span>
-      </div>
-      <div class="apply-arrow">kubectl apply -f deployment.yaml</div>
-      <div class="k8s-engine">
-        <div class="k8s-engine-title">☸ Kubernetes Control Plane</div>
-        <div class="k8s-engine-sub">Liên tục so sánh <b>desired state</b> vs <b>actual state</b><br>và tự hành động để khớp</div>
-      </div>
-    </div>
-    <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">TRẠNG THÁI THỰC TẾ (Actual State)</div>
-      <div class="desired-state" id="desired-state-grid">
-        <!-- Filled by JS -->
-      </div>
-      <div style="margin-top:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);padding:12px;">
-        <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">RECONCILIATION LOOP</div>
-        <div id="reconcile-log" style="font-size:.68rem;line-height:1.8;color:var(--text);">
-          <div> <b>Desired:</b> 3 replicas &nbsp;|&nbsp; <b>Actual:</b> <span id="rc-actual">3</span> replicas</div>
-          <div id="rc-action" style="color:var(--green);"> Trạng thái khớp — không cần hành động</div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:10px;letter-spacing:.5px;">📋 DESIRED STATE — DevOps khai báo</div>
+
+      <!-- 3 thẻ config chính -->
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;gap:10px;background:var(--blue-bg);border:1px solid var(--blue-bd);border-radius:8px;padding:10px 14px;">
+          <div style="font-size:1.5rem;font-weight:900;color:var(--blue);font-family:monospace;width:36px;text-align:center;" id="yaml-replicas">3</div>
+          <div>
+            <div style="font-size:.75rem;font-weight:700;color:var(--blue);">replicas: 3</div>
+       
+          </div>
+          <div style="margin-left:auto;font-size:.6rem;background:var(--blue);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">Deployment</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;background:var(--orange-bg);border:1px solid var(--orange-bd);border-radius:8px;padding:10px 14px;">
+          <div style="font-size:1.5rem;font-weight:900;color:var(--orange);font-family:monospace;width:36px;text-align:center;">50%</div>
+          <div>
+            <div style="font-size:.75rem;font-weight:700;color:var(--orange);">targetCPU: 50%</div>
+          
+          </div>
+          <div style="margin-left:auto;font-size:.6rem;background:var(--orange);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">HPA</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;background:var(--green-bg);border:1px solid var(--green-bd);border-radius:8px;padding:10px 14px;">
+          <div style="font-size:.85rem;font-weight:900;color:var(--green);font-family:monospace;width:36px;text-align:center;">3→10</div>
+          <div>
+            <div style="font-size:.75rem;font-weight:700;color:var(--green);">min: 3 / max: 10 Pods</div>
+          
+          </div>
+          <div style="margin-left:auto;font-size:.6rem;background:var(--green);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">HPA</div>
         </div>
       </div>
-      <div style="margin-top:10px;">
-        <div style="font-size:.7rem;color:var(--muted);margin-bottom:6px;">Thử xóa 1 Pod thủ công (K8s sẽ tự tạo lại):</div>
-        <button class="btn btn-red btn-sm" onclick="manualDelete()">🗑 kubectl delete pod shop-api-xxx</button>
+
+      <!-- kubectl apply arrow -->
+      
+    </div>
+
+    <!-- PHẢI: Actual State + Reconciliation -->
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:10px;letter-spacing:.5px;">⚙ ACTUAL STATE — K8s thực thi</div>
+
+      <!-- Desired vs Actual -->
+      <div class="desired-state" id="desired-state-grid" style="margin-bottom:12px;"><!-- Filled by JS --></div>
+
+      <!-- Reconciliation loop -->
+      <div style="background:var(--bg);border-radius:8px;border:1px solid var(--border);padding:12px;margin-bottom:12px;">
+        <div style="font-size:.68rem;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">⟳ Reconciliation Loop</div>
+        <div id="reconcile-log" style="font-size:.7rem;line-height:2;color:var(--text);">
+          <div><b>Desired:</b> 3 replicas &nbsp;|&nbsp; <b>Actual:</b> <span id="rc-actual">3</span> replicas</div>
+          <div id="rc-action" style="color:var(--green);">✓ Trạng thái khớp — không cần hành động</div>
+        </div>
       </div>
+
+      <!-- Thử xóa pod -->
+      <div style="font-size:.7rem;color:var(--muted);margin-bottom:6px;">Thử xóa 1 Pod — K8s sẽ tự tạo lại:</div>
+      <button class="btn btn-red btn-sm" onclick="manualDelete()"> Delete Pod</button>
     </div>
   </div>
 </div>
@@ -337,7 +349,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--orange-bg);color:var(--orange);">2</div>
     <div>
       <div class="section-title">Tự Động Co Giãn — HPA (Horizontal Pod Autoscaler)</div>
-      <div class="section-sub">CPU > 50% → K8s tự nhân bản Pod lên đến 30 | CPU thấp → tự thu hồi về 3</div>
+  
     </div>
   </div>
 
@@ -395,7 +407,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">3</div>
     <div>
       <div class="section-title">Cân Bằng Tải (Load Balancing)</div>
-      <div class="section-sub">K8s Service tự động chia đều request vào tất cả Pods — không Pod nào bị quá tải</div>
+    
     </div>
   </div>
 
@@ -440,7 +452,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--red-bg);color:var(--red);">4</div>
     <div>
       <div class="section-title">Tự Phục Hồi (Self-Healing)</div>
-      <div class="section-sub">Pod sập → K8s phát hiện trong 5s → tạo Pod mới thay thế → 0 downtime</div>
+  
     </div>
   </div>
 
@@ -459,8 +471,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
       <div id="kill-list"></div>
       <div id="heal-status" style="margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px;font-size:.72rem;font-family:monospace;min-height:44px;line-height:1.7;color:var(--muted);">— Chưa có sự kiện</div>
       <div style="margin-top:12px;background:var(--red-bg);border:1px solid var(--red-bd);border-radius:7px;padding:10px;">
-        <div style="font-size:.72rem;font-weight:700;color:var(--red);margin-bottom:4px;">Tại sao Pod mới kế thừa requests?</div>
-        <div style="font-size:.68rem;color:#7f1d1d;line-height:1.6;">Trong K8s thật, shared state (đơn hàng, giỏ hàng) được lưu ở <b>Redis / Database</b> — không phải trong Pod. Pod chỉ là "máy tính" xử lý. Pod mới khởi động, kết nối vào Redis, thấy đầy đủ dữ liệu và tiếp tục xử lý.</div>
+        
+      
       </div>
     </div>
     <div>
@@ -508,7 +520,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:#0f172a;color:#38bdf8;">⬛</div>
     <div>
       <div class="section-title">Real-Time Event Log</div>
-      <div class="section-sub">kubectl logs / kubectl get events</div>
+     
     </div>
   </div>
   <div id="log"></div>
@@ -935,8 +947,8 @@ function killPod(podId) {
   setTimeout(() => {
     setTL(1,'done'); setTL(2,'active');
     flowSet('shf',[3],'orange');
-    setHeal(\`<span style="color:var(--orange)">🚫 \${podId} rút khỏi Service pool — không nhận request mới</span>\`);
-    log(\`🚫 \${podId} rút khỏi endpoint pool\`, '#fbbf24');
+    setHeal(\`<span style="color:var(--orange)"> \${podId} rút khỏi Service pool — không nhận request mới</span>\`);
+    log(\` \${podId} rút khỏi endpoint pool\`, '#fbbf24');
   }, 2000);
 
   // t=3s: create new
@@ -1079,13 +1091,11 @@ hpaLog('INFO: minReplicas=3 maxReplicas=15 targetCPU=50%');
     };
     es.onerror = function() { /* tự reconnect */ };
 
-    // Load Redis state
+    // Load Redis state — luôn ghi đè totalRequests kể cả khi = 0
     function _loadRedisState() {
       fetch('/api/state').then(r=>r.json()).then(d => {
-        if (d.total > 0) {
-          totalRequests = d.total;
-          document.getElementById('total-req').textContent = d.total.toLocaleString();
-        }
+        totalRequests = d.total || 0;
+        document.getElementById('total-req').textContent = totalRequests.toLocaleString();
         render();
       }).catch(()=>{});
     }
@@ -1131,13 +1141,12 @@ hpaLog('INFO: minReplicas=3 maxReplicas=15 targetCPU=50%');
       if (btn) { btn.disabled=false; btn.textContent='⚡ Gửi 100 Requests'; }
     };
 
-    // ── Override resetAll: xóa Redis trước, rồi reset local ──
+    // ── Override resetAll: xóa Redis rồi reset local ngay (không chờ SSE) ──
     window.resetAll = async function() {
       try {
         await fetch('/api/reset', {method:'POST'});
-        // _origReset() sẽ được gọi qua SSE 'reset' event
+        _origReset(); // Gọi trực tiếp sau khi fetch xong
       } catch(e) {
-        // Fallback nếu mất mạng
         _origReset();
         log('↺ Reset local (offline mode)', '#94a3b8');
       }
