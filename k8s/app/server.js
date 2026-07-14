@@ -5,6 +5,7 @@ const redis = require("redis");
 const POD_HOSTNAME = os.hostname();
 const store = redis.createClient({
   socket: { host: process.env.REDIS_HOST || "localhost", port: 6379 },
+  password: process.env.REDIS_PASSWORD || undefined,
 });
 store.connect().catch(console.error);
 
@@ -60,6 +61,7 @@ const HTML = `<!DOCTYPE html>
   --orange:#ea580c;--orange-bg:#fff7ed;--orange-bd:#fed7aa;
   --purple:#7c3aed;--purple-bg:#f5f3ff;--purple-bd:#ddd6fe;
   --yellow:#ca8a04;--yellow-bg:#fefce8;--yellow-bd:#fde68a;
+  --teal:#0891b2;--teal-bg:#ecfeff;--teal-bd:#a5f3fc;
   --gray:#64748b;--border:#e2e8f0;--bg:#f8fafc;--card:#fff;--text:#0f172a;--muted:#64748b;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -211,6 +213,38 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 
 .notice{background:var(--yellow-bg);border:1px solid var(--yellow-bd);border-radius:7px;padding:9px 13px;font-size:.73rem;color:#78350f;line-height:1.5;margin-bottom:12px;}
 
+/* ── COST DASHBOARD ── */
+.cost-card{background:linear-gradient(135deg,#052e16,#14532d);border:1px solid #166534;border-radius:8px;padding:12px 14px;position:relative;overflow:hidden;}
+.cost-card .stat-label{color:#86efac;}
+.cost-card .stat-value{color:#4ade80;}
+.cost-rate{font-size:.65rem;color:#86efac;margin-top:2px;}
+
+/* ── ROLLING UPDATE ── */
+.pod-dot.ver-new{box-shadow:inset 0 0 0 2px var(--purple);}
+.pod-dot.ver-old{box-shadow:inset 0 0 0 2px var(--blue);}
+.version-pill{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:20px;font-family:monospace;}
+.version-pill.old{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);}
+.version-pill.new{background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple-bd);}
+.rollout-track{height:14px;background:var(--border);border-radius:7px;overflow:hidden;display:flex;margin:10px 0;}
+.rollout-seg{height:100%;transition:width .5s;}
+.rollout-seg.old{background:var(--blue);}
+.rollout-seg.new{background:var(--purple);}
+.legend-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle;}
+
+/* ── CONFIGMAP ── */
+.cm-pod-row{display:flex;align-items:center;gap:8px;font-size:.72rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;}
+.cm-pod-row.stale{border-color:var(--orange-bd);background:var(--orange-bg);}
+.cm-tag{font-size:.6rem;font-weight:700;padding:2px 6px;border-radius:4px;font-family:monospace;}
+.cm-tag.synced{background:var(--teal-bg);color:var(--teal);border:1px solid var(--teal-bd);}
+.cm-tag.stale{background:var(--orange-bg);color:var(--orange);border:1px solid var(--orange-bd);}
+
+/* ── SECRET ── */
+.secret-mask{font-family:monospace;letter-spacing:1px;}
+.rbac-row{display:flex;align-items:center;gap:8px;font-size:.72rem;padding:6px 10px;border-radius:6px;background:var(--bg);border:1px solid var(--border);}
+
+/* ── INGRESS ── */
+.ingress-url-bar{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:monospace;font-size:.72rem;color:var(--text);}
+
 /* ── NUMBER TICKER ── */
 @keyframes countUp{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 .tick{display:inline-block;animation:countUp .2s ease;}
@@ -258,9 +292,10 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
   </div>
 </div>
 
-<div class="g2" style="margin-bottom:16px;">
+<div class="g3" style="margin-bottom:16px;">
   <div class="stat-card"><div class="stat-label">Tổng Requests</div><div class="stat-value" id="total-req">0</div><div class="stat-sub"></div></div>
   <div class="stat-card"><div class="stat-label">Pods Đang Chạy</div><div class="stat-value" id="pod-count-val" style="color:var(--green)">3</div><div class="stat-sub">Kubernetes duy trì tự động</div></div>
+  <div class="cost-card"><div class="stat-label"> CHI PHÍ HẠ TẦNG</div><div class="stat-value" id="cost-val">0₫</div><div class="cost-rate" id="cost-rate">3 Pods × 5.000₫/giờ = 15.000₫/giờ</div></div>
 </div>
 
 <!-- ══════════════════════════════════════════ -->
@@ -514,6 +549,198 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════ -->
+<!-- TÍNH CHẤT 5: ROLLING UPDATE / ROLLBACK    -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-head">
+    <div class="section-num" style="background:var(--purple-bg);color:var(--purple);">5</div>
+    <div>
+      <div class="section-title">Triển Khai Không Downtime — Rolling Update &amp; Rollback</div>
+    </div>
+  </div>
+
+  <div class="flow" id="ru-flow">
+    <span class="flow-step" id="ruf0">Đang chạy v2.0</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="ruf1">Tạo Pod v3.0 mới</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="ruf2">Readiness OK</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="ruf3">Xóa 1 Pod v2.0</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="ruf4">Lặp lại đến khi xong</span>
+  </div>
+
+  <div class="g2">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="font-size:.7rem;font-weight:700;color:var(--muted);">PHIÊN BẢN:</span>
+        <span class="version-pill old" id="ru-current-pill">image: k8s-counter:v2.0</span>
+      </div>
+
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:4px;">TIẾN ĐỘ ROLLOUT</div>
+      <div class="rollout-track">
+        <div class="rollout-seg old" id="ru-seg-old" style="width:100%"></div>
+        <div class="rollout-seg new" id="ru-seg-new" style="width:0%"></div>
+      </div>
+      <div style="font-size:.68rem;color:var(--muted);margin-bottom:12px;">
+        <span class="legend-dot" style="background:var(--blue)"></span>v2.0: <span id="ru-count-old">3</span> Pod &nbsp;&nbsp;
+        <span class="legend-dot" style="background:var(--purple)"></span>v3.0: <span id="ru-count-new">0</span> Pod
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-blue" id="ru-deploy-btn" onclick="startRollingUpdate()">🚀 Deploy v3.0</button>
+        <button class="btn btn-red btn-sm" id="ru-rollback-btn" onclick="startRollback()" disabled>↩ Rollback về v2.0</button>
+      </div>
+      <div class="notice" style="margin-top:12px;">
+        maxSurge: 1 · maxUnavailable: 0 — luôn tạo Pod mới &amp; chờ Ready trước khi xóa Pod cũ, đảm bảo <b>0 downtime</b> khi deploy.
+      </div>
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">ROLLOUT STATUS</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:.72rem;font-family:monospace;min-height:44px;line-height:1.7;color:var(--muted);margin-bottom:10px;" id="ru-status">— Chưa deploy</div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:6px;">ROLLOUT LOG</div>
+      <div id="ru-log" style="background:#0f172a;color:#c4b5fd;padding:10px 12px;border-radius:8px;font-family:'Courier New',monospace;font-size:.63rem;height:110px;overflow-y:auto;line-height:1.8;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- TÍNH CHẤT 6: CONFIGMAP                    -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-head">
+    <div class="section-num" style="background:var(--teal-bg);color:var(--teal);">6</div>
+    <div>
+      <div class="section-title">Cấu Hình Tách Rời Khỏi Code — ConfigMap</div>
+    </div>
+  </div>
+
+  <div class="flow" id="cm-flow">
+    <span class="flow-step" id="cmf0">ConfigMap hiện tại</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="cmf1">kubectl edit configmap</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="cmf2">Giá trị mới lưu ở etcd</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="cmf3">Pod đang chạy KHÔNG tự nhận</span><span class="flow-arr">→</span>
+    <span class="flow-step" id="cmf4">rollout restart để áp dụng</span>
+  </div>
+
+  <div class="g2">
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">CONFIGMAP: counter-config</div>
+      <div class="yaml-box" style="margin-bottom:12px;">
+        <div class="yaml-live" id="cm-live-tag" style="background:var(--teal)">SYNCED</div>
+        <div><span class="k">REDIS_HOST:</span> <span class="v">"redis-service"</span></div>
+        <div><span class="k">LOG_LEVEL:</span> <span class="v" id="cm-loglevel-display">"info"</span></div>
+        <div><span class="k">STRESS_DURATION_MS:</span> <span class="v">"30000"</span></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+        <label style="font-size:.72rem;color:var(--muted);">Đổi LOG_LEVEL:</label>
+        <select id="cm-loglevel-select" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);font-size:.72rem;">
+          <option value="info">info</option>
+          <option value="debug">debug</option>
+          <option value="warn">warn</option>
+        </select>
+        <button class="btn btn-teal btn-sm" style="background:var(--teal)" onclick="editConfigMap()">✏ kubectl edit configmap</button>
+      </div>
+      <button class="btn btn-orange btn-sm" id="cm-restart-btn" onclick="rolloutRestartForConfig()" disabled>🔁 kubectl rollout restart deployment</button>
+      <div class="notice" style="margin-top:12px;">
+        Đây là hành vi thật của K8s: sửa <code>ConfigMap</code> KHÔNG tự động đẩy giá trị mới vào Pod đang chạy (khi dùng <code>envFrom</code>) — bắt buộc phải <code>rollout restart</code> để Pod mới đọc lại config.
+      </div>
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">LOG_LEVEL ĐANG CHẠY TRÊN TỪNG POD</div>
+      <div id="cm-pod-status" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:6px;">CONFIGMAP LOG</div>
+      <div id="cm-log" style="background:#0f172a;color:#67e8f9;padding:10px 12px;border-radius:8px;font-family:'Courier New',monospace;font-size:.63rem;height:110px;overflow-y:auto;line-height:1.8;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- TÍNH CHẤT 7: SECRET                       -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-head">
+    <div class="section-num" style="background:#1e293b;color:#f87171;">7</div>
+    <div>
+      <div class="section-title">Bí Mật Được Tách Riêng — Secret</div>
+    </div>
+  </div>
+
+  <div class="g2">
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">$ kubectl get secret redis-secret -o yaml</div>
+      <div class="yaml-box" style="margin-bottom:12px;">
+        <div><span class="k">apiVersion:</span> <span class="v">v1</span></div>
+        <div><span class="k">kind:</span> <span class="v">Secret</span></div>
+        <div><span class="k">type:</span> <span class="v">Opaque</span></div>
+        <div><span class="k">data:</span></div>
+        <div>&nbsp;&nbsp;<span class="k">REDIS_PASSWORD:</span> <span class="v secret-mask" id="secret-value-display">c2lldS1iaS1tYXQt...</span></div>
+      </div>
+      <button class="btn btn-gray btn-sm" onclick="toggleSecretView()" id="secret-toggle-btn">👁 Hiện giá trị thật (base64 decode)</button>
+      <div class="notice" style="margin-top:12px;">
+        <code>Secret</code> chỉ mã hoá <b>base64</b> — không phải encryption thật. Ai có quyền <code>get secret</code> trên cluster đều đọc được nguyên văn. Bảo mật thật sự nằm ở <b>RBAC</b> (ai được quyền get) + <b>encryption at rest</b> trên etcd.
+      </div>
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">REDIS ĐANG DÙNG SECRET NÀY ĐỂ AUTH</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:monospace;font-size:.7rem;line-height:2;margin-bottom:14px;">
+        <div>redis-server --requirepass <span id="secret-conn-1">••••••••••••••••••••</span></div>
+        <div>Pod env REDIS_PASSWORD=<span id="secret-conn-2">••••••••••••••••••••</span></div>
+      </div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">AI ĐƯỢC PHÉP ĐỌC SECRET NÀY? (RBAC)</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div class="rbac-row"><span class="tag tag-green">✓ ALLOW</span> ServiceAccount của Pod <b>counter</b> (qua <code>secretKeyRef</code>)</div>
+        <div class="rbac-row"><span class="tag tag-green">✓ ALLOW</span> Cluster Admin (Role: <code>cluster-admin</code>)</div>
+        <div class="rbac-row"><span class="tag tag-red">✗ DENY</span> Dev không có Role <code>secret-reader</code> trong namespace</div>
+        <div class="rbac-row"><span class="tag tag-red">✗ DENY</span> Service ở namespace khác (không có RoleBinding)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- TÍNH CHẤT 8: INGRESS                      -->
+<!-- ══════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-head">
+    <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">8</div>
+    <div>
+      <div class="section-title">Cổng Vào Duy Nhất Của Cluster — Ingress</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <span class="flow-step s-blue">Khách hàng</span><span class="flow-arr">→</span>
+    <span class="flow-step s-blue">DNS: counter.local</span><span class="flow-arr">→</span>
+    <span class="flow-step s-blue">Ingress Controller (nginx)</span><span class="flow-arr">→</span>
+    <span class="flow-step s-blue">So khớp host + path</span><span class="flow-arr">→</span>
+    <span class="flow-step s-blue">counter-service</span><span class="flow-arr">→</span>
+    <span class="flow-step s-blue">Pod</span>
+  </div>
+
+  <div class="g2">
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">GỬI REQUEST QUA INGRESS</div>
+      <div class="ingress-url-bar" id="ingress-url-bar" style="margin-bottom:10px;">GET http://counter.local/</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-blue btn-sm" onclick="sendIngressRequest()"> Gửi tới counter.local</button>
+        <button class="btn btn-red btn-sm" onclick="sendIngressRequestBadHost()"> Thử host lạ (unknown.local)</button>
+      </div>
+      <div class="notice" style="margin-top:12px;">
+        Ingress cho phép <b>1 địa chỉ IP / LoadBalancer duy nhất</b> định tuyến vào nhiều Service theo domain hoặc path, thay vì phải mở NodePort riêng cho từng Service như trước.
+      </div>
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">INGRESS RULE ĐANG ÁP DỤNG</div>
+      <div class="yaml-box" style="margin-bottom:12px;">
+        <div><span class="k">host:</span> <span class="v">counter.local</span></div>
+        <div><span class="k">path:</span> <span class="v">/</span> <span class="c">(Prefix)</span></div>
+        <div><span class="k">backend:</span> <span class="v">counter-service:80</span></div>
+      </div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:6px;">INGRESS CONTROLLER LOG</div>
+      <div id="ingress-log" style="background:#0f172a;color:#93c5fd;padding:10px 12px;border-radius:8px;font-family:'Courier New',monospace;font-size:.63rem;height:120px;overflow-y:auto;line-height:1.8;"></div>
+    </div>
+  </div>
+</div>
+
 <!-- LOG -->
 <div class="section">
   <div class="section-head">
@@ -545,6 +772,25 @@ let healLock = false;
 let scenario = 'normal'; // 'normal' | 'flash'
 let trafficIv = null;
 
+// ── Rolling Update / Rollback state ──
+const OLD_VERSION = 'v2.0', NEW_VERSION = 'v3.0';
+let CURRENT_VERSION = OLD_VERSION;
+let ruInProgress = false;
+
+// ── Cost Dashboard state ──
+const COST_PER_POD_HOUR = 5000; // VND, ước tính demo
+let costAccum = 0;
+
+// ── ConfigMap state ──
+let cmAppliedLogLevel = 'info';   // giá trị Pod đang chạy thực sự đọc được
+let cmPendingLogLevel = 'info';   // giá trị mới nhất trong ConfigMap (etcd)
+let cmDirty = false;              // true khi pending khác applied (chưa rollout restart)
+let cmInProgress = false;
+
+// ── Secret state ──
+const REDIS_SECRET_VALUE = 'sieu-bi-mat-doi-di-nhe-123';
+let secretRevealed = false;
+
 function nextNum() {
   for (let i = podCounter + 1; i <= 999; i++) {
     if (!usedNums.has(i)) { podCounter = i; return i; }
@@ -553,9 +799,9 @@ function nextNum() {
 }
 function resetCounter() { podCounter = 0; usedNums.clear(); }
 
-function addPodObj(num, status, hits) {
+function addPodObj(num, status, hits, version) {
   usedNums.add(num);
-  pods.push({ num, id:'Pod-'+num, status, hits: hits||0 });
+  pods.push({ num, id:'Pod-'+num, status, hits: hits||0, version: version || CURRENT_VERSION, envLogLevel: cmAppliedLogLevel });
 }
 
 // ── Init ──
@@ -563,7 +809,7 @@ function initPods() {
   pods = []; resetCounter();
   for (let i = 0; i < INIT_PODS; i++) {
     const n = nextNum();
-    addPodObj(n, 'alive', 0);
+    addPodObj(n, 'alive', 0, OLD_VERSION);
   }
 }
 initPods();
@@ -626,6 +872,9 @@ function render() {
   renderKillList();
   renderDesiredState();
   updateHPAUI();
+  renderRollout();
+  renderCost();
+  renderConfigMap();
   document.getElementById('total-req').textContent = totalRequests.toLocaleString();
   document.getElementById('pod-count-val').textContent = pods.filter(p=>p.status!=='dead').length;
 }
@@ -635,8 +884,139 @@ function renderPodGrid() {
   const sorted = [...pods].sort((a,b)=>a.num-b.num);
   g.innerHTML = sorted.map(p => {
     const cls = p.status==='alive'?'alive':p.status==='boot'?'boot':'dead';
-    return \`<div class="pod-dot \${cls}" title="\${p.id} (\${p.status}) \${p.hits} reqs">\${p.num}</div>\`;
+    const verCls = p.version===NEW_VERSION ? 'ver-new' : 'ver-old';
+    return \`<div class="pod-dot \${cls} \${verCls}" title="\${p.id} (\${p.status}) \${p.version} — \${p.hits} reqs">\${p.num}</div>\`;
   }).join('');
+}
+
+// ════════════════════════════════════════════════
+// COST DASHBOARD
+// ════════════════════════════════════════════════
+function renderCost() {
+  const alive = pods.filter(p=>p.status!=='dead').length;
+  const rate = alive * COST_PER_POD_HOUR;
+  const el = document.getElementById('cost-val');
+  const rateEl = document.getElementById('cost-rate');
+  if (el) el.textContent = Math.round(costAccum).toLocaleString('vi-VN') + '₫';
+  if (rateEl) rateEl.textContent = alive + ' Pods × ' + COST_PER_POD_HOUR.toLocaleString('vi-VN') + '₫/giờ = ' + rate.toLocaleString('vi-VN') + '₫/giờ';
+}
+
+// ════════════════════════════════════════════════
+// ROLLING UPDATE / ROLLBACK
+// ════════════════════════════════════════════════
+function ruLog(msg, col) {
+  const el = document.getElementById('ru-log');
+  if (!el) return;
+  const d = document.createElement('div');
+  d.style.color = col || '#c4b5fd';
+  d.textContent = '['+new Date().toLocaleTimeString('vi',{hour12:false})+'] '+msg;
+  el.appendChild(d); el.scrollTop = el.scrollHeight;
+  if (el.children.length > 60) el.removeChild(el.firstChild);
+}
+function setRUStatus(html) {
+  const el = document.getElementById('ru-status');
+  if (el) el.innerHTML = html;
+}
+function renderRollout() {
+  const total = pods.filter(p=>p.status!=='dead').length || 1;
+  const oldCount = pods.filter(p=>p.status!=='dead' && p.version===OLD_VERSION).length;
+  const newCount = pods.filter(p=>p.status!=='dead' && p.version===NEW_VERSION).length;
+  const oldPct = Math.round(oldCount/total*100);
+  const newPct = 100 - oldPct;
+  const segOld = document.getElementById('ru-seg-old');
+  const segNew = document.getElementById('ru-seg-new');
+  if (segOld) segOld.style.width = oldPct+'%';
+  if (segNew) segNew.style.width = newPct+'%';
+  const co = document.getElementById('ru-count-old'); if (co) co.textContent = oldCount;
+  const cn = document.getElementById('ru-count-new'); if (cn) cn.textContent = newCount;
+  const pill = document.getElementById('ru-current-pill');
+  if (pill) {
+    if (newCount === 0) {
+      pill.textContent = 'image: k8s-counter:'+OLD_VERSION;
+      pill.className = 'version-pill old';
+    } else if (oldCount === 0) {
+      pill.textContent = 'image: k8s-counter:'+NEW_VERSION;
+      pill.className = 'version-pill new';
+    } else {
+      pill.textContent = 'image: '+OLD_VERSION+' → '+NEW_VERSION+' (đang chuyển đổi)';
+      pill.className = 'version-pill new';
+    }
+  }
+  const deployBtn = document.getElementById('ru-deploy-btn');
+  const rollbackBtn = document.getElementById('ru-rollback-btn');
+  if (deployBtn) deployBtn.disabled = ruInProgress || newCount > 0;
+  if (rollbackBtn) rollbackBtn.disabled = ruInProgress || newCount === 0;
+}
+
+function startRollingUpdate() { performRollout(OLD_VERSION, NEW_VERSION, '🚀 Deploy v3.0'); }
+function startRollback() { performRollout(NEW_VERSION, OLD_VERSION, '↩ Rollback v2.0'); }
+
+function performRollout(fromV, toV, label) {
+  if (ruInProgress) { toast('⏳ Rollout đang chạy, vui lòng đợi...','orange',2000); return; }
+  const targets = pods.filter(p => p.status==='alive' && p.version===fromV);
+  if (!targets.length) { toast('Không có Pod '+fromV+' để chuyển đổi','red',2000); return; }
+
+  ruInProgress = true;
+  CURRENT_VERSION = toV;
+  flowReset('ruf', 5);
+  flowSet('ruf',[0],toV===NEW_VERSION?'blue':'orange');
+  setRUStatus('<span style="color:var(--blue)">▶ Bắt đầu '+label+' ('+targets.length+' Pod cần chuyển đổi)</span>');
+  ruLog(label+' bắt đầu — chiến lược RollingUpdate (maxSurge:1, maxUnavailable:0)', '#a5b4fc');
+  log('🚀 '+label+' — bắt đầu chuyển đổi tuần tự '+targets.length+' Pod', '#c4b5fd');
+  toast(label+' đang triển khai...', 'blue', 2500);
+  render();
+
+  let idx = 0;
+  function step() {
+    if (idx >= targets.length) {
+      ruInProgress = false;
+      flowSet('ruf',[0,1,2,3,4],'green');
+      setRUStatus('<span style="color:var(--green)"> Hoàn tất! Toàn bộ Pod đang chạy '+toV+' — 0 downtime</span>');
+      ruLog('Rollout hoàn tất — 100% Pod chạy '+toV, '#4ade80');
+      log(' Rollout hoàn tất → tất cả Pod chạy '+toV, '#4ade80');
+      toast(' Rollout xong! Tất cả Pod chạy '+toV, 'green', 3500);
+      setTimeout(()=>flowReset('ruf',5), 3500);
+      render();
+      return;
+    }
+    const oldPod = targets[idx];
+
+    // 1) tạo Pod mới với version đích (maxSurge: +1 tạm thời)
+    flowSet('ruf',[1],'blue');
+    const n = nextNum();
+    if (n === null) { idx++; step(); return; }
+    const newId = 'Pod-'+n;
+    const newPod = { num:n, id:newId, status:'boot', hits:oldPod.hits, version:toV, envLogLevel:cmAppliedLogLevel };
+    pods.push(newPod);
+    ruLog('Tạo '+newId+' ('+toV+') — pulling image, khởi động...', '#a5b4fc');
+    log('➕ Rolling Update: tạo '+newId+' ('+toV+')', '#c4b5fd');
+    render();
+
+    setTimeout(() => {
+      // 2) readiness pass
+      flowSet('ruf',[2],'blue');
+      newPod.status = 'alive';
+      ruLog(newId+' → Readiness OK, thêm vào Service pool', '#a5f3fc');
+      render();
+
+      setTimeout(() => {
+        // 3) xóa 1 Pod version cũ (maxUnavailable: 0 → xóa sau khi Pod mới đã Ready)
+        flowSet('ruf',[3],'orange');
+        oldPod.status = 'dead';
+        ruLog('Xóa '+oldPod.id+' ('+fromV+') — đã thay bằng '+newId, '#fca5a5');
+        log('➖ Rolling Update: xóa '+oldPod.id+' ('+fromV+')', '#fca5a5');
+        render();
+        setTimeout(() => {
+          pods = pods.filter(p => p !== oldPod);
+          flowSet('ruf',[4],'green');
+          render();
+          idx++;
+          setTimeout(step, 400);
+        }, 500);
+      }, 900);
+    }, 1200);
+  }
+  step();
 }
 
 function renderLB() {
@@ -841,7 +1221,7 @@ function startStress() {
         const n = nextNum(); if (!n) break;
         usedNums.add(n);
         const nid = 'Pod-'+n;
-        const obj = { num:n, id:nid, status:'boot', hits:0 };
+        const obj = { num:n, id:nid, status:'boot', hits:0, version:CURRENT_VERSION, envLogLevel:cmAppliedLogLevel };
         pods.push(obj);
         hpaLog(\`INFO: Scaling up → creating \${nid} (replicas: \${cur+i+1}/\${MAX_PODS})\`, '#a5f3fc');
         log(\`➕ HPA tạo \${nid} (CPU:\${Math.round(hpaCpu)}%, Pods: \${cur+i+1})\`, '#a78bfa');
@@ -960,7 +1340,7 @@ function killPod(podId) {
     if (newNum !== null) {
       usedNums.add(newNum);
       const newId = 'Pod-'+newNum;
-      newPodRef = { num:newNum, id:newId, status:'boot', hits:oldHits };
+      newPodRef = { num:newNum, id:newId, status:'boot', hits:oldHits, version:pod.version, envLogLevel:pod.envLogLevel };
       pods.push(newPodRef);
       flowSet('shf',[4],'orange');
       setHeal(\`<span style="color:var(--orange)">🆕 K8s tạo \${newId} — pulling image, khởi động... (kế thừa \${oldHits} reqs từ Redis)</span>\`);
@@ -1008,6 +1388,167 @@ function manualDelete() {
 }
 
 // ════════════════════════════════════════════════
+// CONFIGMAP — LIVE EDIT + ROLLOUT RESTART
+// ════════════════════════════════════════════════
+function cmLog(msg, col) {
+  const el = document.getElementById('cm-log');
+  if (!el) return;
+  const d = document.createElement('div');
+  d.style.color = col || '#67e8f9';
+  d.textContent = '['+new Date().toLocaleTimeString('vi',{hour12:false})+'] '+msg;
+  el.appendChild(d); el.scrollTop = el.scrollHeight;
+  if (el.children.length > 60) el.removeChild(el.firstChild);
+}
+
+function renderConfigMap() {
+  const disp = document.getElementById('cm-loglevel-display');
+  const liveTag = document.getElementById('cm-live-tag');
+  const restartBtn = document.getElementById('cm-restart-btn');
+  if (disp) disp.textContent = '"'+cmPendingLogLevel+'"' + (cmDirty ? ' (chưa áp dụng)' : '');
+  if (liveTag) {
+    liveTag.textContent = cmDirty ? 'MODIFIED' : 'SYNCED';
+    liveTag.style.background = cmDirty ? 'var(--orange)' : 'var(--teal)';
+  }
+  if (restartBtn) restartBtn.disabled = !cmDirty || cmInProgress;
+
+  const el = document.getElementById('cm-pod-status');
+  if (!el) return;
+  const alive = pods.filter(p=>p.status!=='dead').sort((a,b)=>a.num-b.num);
+  el.innerHTML = alive.map(p => {
+    const synced = p.envLogLevel === cmPendingLogLevel;
+    return \`<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg);border-radius:6px;">
+      <span style="font-size:.72rem;font-weight:700;font-family:monospace;width:56px;">\${p.id}</span>
+      <span style="font-size:.68rem;color:var(--muted);font-family:monospace;">LOG_LEVEL=\${p.envLogLevel}</span>
+      <span class="tag \${synced?'tag-green':'tag-orange'}" style="margin-left:auto;">\${synced?'✓ Đồng bộ':'⚠ Cũ — cần restart'}</span>
+    </div>\`;
+  }).join('');
+}
+
+function editConfigMap() {
+  const sel = document.getElementById('cm-loglevel-select');
+  const val = sel.value;
+  if (val === cmPendingLogLevel) { toast('Giá trị không đổi','gray',2000); return; }
+  cmPendingLogLevel = val;
+  cmDirty = (cmPendingLogLevel !== cmAppliedLogLevel);
+  flowReset('cmf', 5);
+  flowSet('cmf',[0,1,2],'orange');
+  cmLog('kubectl edit configmap counter-config → LOG_LEVEL="'+val+'"', '#67e8f9');
+  cmLog('⚠ Giá trị đã lưu ở etcd, nhưng Pod đang chạy vẫn dùng LOG_LEVEL="'+cmAppliedLogLevel+'"', '#fbbf24');
+  log('📝 ConfigMap counter-config cập nhật: LOG_LEVEL='+val, '#67e8f9');
+  toast(cmDirty ? 'ConfigMap đã lưu — Pod chưa nhận, cần rollout restart' : 'Giá trị khớp lại với Pod đang chạy', cmDirty?'orange':'green', 3500);
+  render();
+}
+
+function rolloutRestartForConfig() {
+  if (!cmDirty) { toast('Không có thay đổi nào cần áp dụng','gray',2000); return; }
+  if (cmInProgress || ruInProgress) { toast('⏳ Đang có rollout khác chạy, vui lòng đợi...','orange',2000); return; }
+  const newVal = cmPendingLogLevel;
+  cmInProgress = true;
+  flowSet('cmf',[3,4],'orange');
+  cmLog('kubectl rollout restart deployment/counter-deployment', '#67e8f9');
+  log('🔁 Rollout restart để áp dụng ConfigMap mới (LOG_LEVEL='+newVal+')...', '#67e8f9');
+  render();
+
+  const targets = pods.filter(p=>p.status==='alive');
+  let idx = 0;
+  function step() {
+    if (idx >= targets.length) {
+      cmInProgress = false;
+      cmAppliedLogLevel = newVal;
+      cmDirty = false;
+      flowSet('cmf',[0,1,2,3,4],'green');
+      cmLog('Rollout hoàn tất — 100% Pod đang chạy LOG_LEVEL="'+newVal+'"', '#4ade80');
+      log('✅ Rollout restart xong → LOG_LEVEL='+newVal+' áp dụng toàn cluster', '#4ade80');
+      toast('ConfigMap mới đã áp dụng cho toàn bộ Pod!', 'green', 3000);
+      setTimeout(()=>flowReset('cmf',5), 3000);
+      render();
+      return;
+    }
+    const p = targets[idx];
+    if (p.status !== 'alive') { idx++; step(); return; }
+    p.status = 'boot';
+    render();
+    cmLog(p.id+' restart để đọc ConfigMap mới...', '#67e8f9');
+    setTimeout(() => {
+      p.status = 'alive';
+      p.envLogLevel = newVal;
+      cmLog(p.id+' → Running, LOG_LEVEL="'+newVal+'"', '#4ade80');
+      render();
+      idx++;
+      setTimeout(step, 350);
+    }, 900);
+  }
+  step();
+}
+
+// ════════════════════════════════════════════════
+// SECRET — MASK / REVEAL
+// ════════════════════════════════════════════════
+function toggleSecretView() {
+  secretRevealed = !secretRevealed;
+  const disp = document.getElementById('secret-value-display');
+  const c1 = document.getElementById('secret-conn-1');
+  const c2 = document.getElementById('secret-conn-2');
+  const btn = document.getElementById('secret-toggle-btn');
+  if (secretRevealed) {
+    const b64 = btoa(REDIS_SECRET_VALUE);
+    if (disp) disp.textContent = b64;
+    if (c1) c1.textContent = REDIS_SECRET_VALUE;
+    if (c2) c2.textContent = REDIS_SECRET_VALUE;
+    if (btn) btn.textContent = '🙈 Ẩn giá trị (mask lại)';
+    log('👁 Secret redis-secret vừa được decode xem — hành động này nên được audit!', '#f87171');
+    toast('⚠ Đang hiện Secret dạng plaintext — cẩn thận khi chia sẻ màn hình!', 'red', 3500);
+  } else {
+    if (disp) disp.textContent = 'c2lldS1iaS1tYXQt...';
+    if (c1) c1.textContent = '••••••••••••••••••••';
+    if (c2) c2.textContent = '••••••••••••••••••••';
+    if (btn) btn.textContent = '👁 Hiện giá trị thật (base64 decode)';
+    log('🙈 Secret redis-secret đã được ẩn lại', '#94a3b8');
+  }
+}
+
+// ════════════════════════════════════════════════
+// INGRESS — ROUTING SIMULATION
+// ════════════════════════════════════════════════
+function ingressLog(msg, col) {
+  const el = document.getElementById('ingress-log');
+  if (!el) return;
+  const d = document.createElement('div');
+  d.style.color = col || '#93c5fd';
+  d.textContent = '['+new Date().toLocaleTimeString('vi',{hour12:false})+'] '+msg;
+  el.appendChild(d); el.scrollTop = el.scrollHeight;
+  if (el.children.length > 60) el.removeChild(el.firstChild);
+}
+
+function sendIngressRequest() {
+  const bar = document.getElementById('ingress-url-bar');
+  if (bar) bar.textContent = 'GET http://counter.local/';
+  ingressLog('nginx: "GET /" Host: counter.local → rule counter-ingress khớp', '#93c5fd');
+  log('🌐 Request tới counter.local/ đi qua Ingress Controller', '#93c5fd');
+  const p = pickPod();
+  if (!p) {
+    toast('Không có Pod alive để nhận request', 'red', 2000);
+    ingressLog('503 Service Unavailable — không có backend endpoint', '#f87171');
+    return;
+  }
+  p.hits++; totalRequests++;
+  ingressLog('→ forward tới Service counter-service:80 → '+p.id, '#93c5fd');
+  ingressLog('← 200 OK từ '+p.id, '#4ade80');
+  log('✅ Ingress route thành công → '+p.id, '#4ade80');
+  toast('Request routed qua Ingress → '+p.id, 'blue', 2500);
+  render();
+}
+
+function sendIngressRequestBadHost() {
+  const bar = document.getElementById('ingress-url-bar');
+  if (bar) bar.textContent = 'GET http://unknown.local/';
+  ingressLog('nginx: "GET /" Host: unknown.local → KHÔNG có rule nào khớp', '#fca5a5');
+  ingressLog('← 404 Not Found (default backend)', '#f87171');
+  log('❌ Request tới unknown.local bị Ingress từ chối (404)', '#f87171');
+  toast('❌ Host lạ bị Ingress chặn (404 default backend)', 'red', 3000);
+}
+
+// ════════════════════════════════════════════════
 // RESET
 // ════════════════════════════════════════════════
 function resetAll() {
@@ -1017,14 +1558,27 @@ function resetAll() {
   healLock = false;
   hpaCpu = 8; hpaPhase = 'idle';
   totalRequests = 0; rrIndex = 0; scenario = 'normal';
+  CURRENT_VERSION = OLD_VERSION; ruInProgress = false; costAccum = 0;
+  cmAppliedLogLevel = 'info'; cmPendingLogLevel = 'info'; cmDirty = false; cmInProgress = false;
+  secretRevealed = false;
   initPods();
   document.getElementById('rps-val').textContent = '0';
   document.getElementById('traffic-fill').style.width = '0%';
   document.getElementById('heal-status').innerHTML = '— Chưa có sự kiện';
   document.getElementById('hpa-log').innerHTML = '';
   document.getElementById('log').innerHTML = '';
+  document.getElementById('ru-log').innerHTML = '';
+  document.getElementById('cm-log').innerHTML = '';
+  document.getElementById('ingress-log').innerHTML = '';
+  setRUStatus('— Chưa deploy');
+  const cmSel = document.getElementById('cm-loglevel-select'); if (cmSel) cmSel.value = 'info';
+  const secDisp = document.getElementById('secret-value-display'); if (secDisp) secDisp.textContent = 'c2lldS1iaS1tYXQt...';
+  const secC1 = document.getElementById('secret-conn-1'); if (secC1) secC1.textContent = '••••••••••••••••••••';
+  const secC2 = document.getElementById('secret-conn-2'); if (secC2) secC2.textContent = '••••••••••••••••••••';
+  const secBtn = document.getElementById('secret-toggle-btn'); if (secBtn) secBtn.textContent = '👁 Hiện giá trị thật (base64 decode)';
+  const ingBar = document.getElementById('ingress-url-bar'); if (ingBar) ingBar.textContent = 'GET http://counter.local/';
   document.getElementById('stop-stress-btn').disabled = true;
-  flowReset('hf', 5); flowReset('shf', 6); resetTL();
+  flowReset('hf', 5); flowReset('shf', 6); flowReset('ruf', 5); flowReset('cmf', 5); resetTL();
   render();
   log('↺ Reset về trạng thái ban đầu — 3 Pods, 0 requests', '#38bdf8');
   toast(' Reset thành công!', 'green', 2000);
@@ -1045,6 +1599,13 @@ setInterval(() => {
     render();
   }
 }, 300);
+
+// ── Cost ticker: quy đổi 1 giây demo ≈ 1 phút vận hành thật ──
+setInterval(() => {
+  const alive = pods.filter(p=>p.status!=='dead').length;
+  costAccum += alive * (COST_PER_POD_HOUR / 60);
+  renderCost();
+}, 1000);
 
 // ── Initial render ──
 render();

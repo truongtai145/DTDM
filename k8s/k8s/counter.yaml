@@ -19,9 +19,15 @@ spec:
         imagePullPolicy: Never
         ports:
         - containerPort: 3000
+        envFrom:
+        - configMapRef:
+            name: counter-config
         env:
-        - name: REDIS_HOST
-          value: "redis-service"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: REDIS_PASSWORD
         resources:
           requests:
             cpu: "100m"           # HPA tính % dựa vào số này
@@ -54,10 +60,9 @@ kind: Service
 metadata:
   name: counter-service
 spec:
-  type: NodePort
+  type: ClusterIP        # Đổi từ NodePort: giờ truy cập qua Ingress
   selector:
     app: counter            # Tự động tìm mọi Pod có label này
   ports:
   - port: 80
     targetPort: 3000
-    nodePort: 30080
