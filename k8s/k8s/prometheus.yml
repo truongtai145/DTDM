@@ -1,0 +1,39 @@
+# ─── prometheus.yml ─────────────────────────────────────────────
+# File cấu hình gốc của Prometheus. Trong Kubernetes, nội dung này
+# được nạp vào Pod Prometheus thông qua ConfigMap
+# (xem prometheus-k8s.yaml, key "prometheus.yml").
+
+global:
+  scrape_interval: 5s       # Cứ 5 giây Prometheus "kéo" (scrape) metric 1 lần
+  evaluation_interval: 5s   # Tần suất đánh giá alerting/recording rules
+
+scrape_configs:
+  # ── Job 1: Tự-giám sát Prometheus ──────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ── Job 2: Ứng dụng NodeJS (counter/flash-sale) ─────────────
+  # Dùng Kubernetes service-discovery để TỰ ĐỘNG tìm mọi Pod có
+  # label app=counter, kể cả khi HPA scale up/down (không cần
+  # sửa file này bằng tay mỗi khi số Pod thay đổi).
+  - job_name: "nodejs-counter"
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ["default"]   # đổi nếu bạn deploy ở namespace khác
+    relabel_configs:
+      # Chỉ giữ lại Pod có label app=counter
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: counter
+      # Pod expose cổng 3000 -> ghép lại thành địa chỉ scrape đúng
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: "${1}:3000"
+      # Gắn thêm nhãn "pod" và "namespace" để dễ lọc trong Grafana
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace

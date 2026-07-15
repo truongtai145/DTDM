@@ -1,0 +1,124 @@
+# ═══════════════════════════════════════════════════════════════
+# grafana-k8s.yaml — Triển khai Grafana trên Minikube
+# ═══════════════════════════════════════════════════════════════
+# Gồm:
+#   1. ConfigMap "grafana-datasources"   -> tự động add Prometheus
+#      làm datasource ngay khi Grafana khởi động (không cần vào UI
+#      bấm tay).
+#   2. ConfigMap "grafana-dashboard-provider" -> khai báo cho Grafana
+#      biết "hãy tự load mọi dashboard .json để trong thư mục X".
+#   3. Deployment + Service.
+#
+# LƯU Ý: ConfigMap chứa NỘI DUNG dashboard (grafana-dashboards) không
+# nằm trong file này vì file JSON khá dài — xem hướng dẫn tạo nó
+# bằng lệnh `kubectl create configmap` ở phần giải thích bên dưới
+# (dùng file grafana-dashboard.json đi kèm).
+
+# ─── 1. Datasource: trỏ Grafana -> Prometheus ─────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        # "prometheus-service" là tên Service Prometheus (DNS nội bộ
+        # K8s tự phân giải nhờ Service Discovery / CoreDNS).
+        url: http://prometheus-service:9090
+        isDefault: true
+        editable: true
+
+# ─── 2. Dashboard provider: nơi Grafana tự động quét dashboard ────
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+data:
+  dashboard-provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: "default"
+        orgId: 1
+        folder: "Kubernetes Simulator"
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 10
+        options:
+          path: /var/lib/grafana/dashboards
+
+# ─── 3. Deployment ─────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"          # demo only — đổi nếu dùng thật
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"           # cho phép xem dashboard không cần login (demo)
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            # ConfigMap này được tạo từ file grafana-dashboard.json
+            # bằng lệnh kubectl (xem giải thích bên dưới)
+            name: grafana-dashboards
+
+# ─── 4. Service ──────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30091       # truy cập: minikube service grafana-service

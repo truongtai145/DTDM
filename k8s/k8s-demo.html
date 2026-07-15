@@ -1,137 +1,4 @@
-const http = require("http");
-const os = require("os");
-const redis = require("redis");
-const promClient = require("prom-client");
-const { monitorEventLoopDelay } = require("perf_hooks");
-
-const POD_HOSTNAME = os.hostname();
-const store = redis.createClient({
-  socket: { host: process.env.REDIS_HOST || "localhost", port: 6379 },
-});
-store.connect().catch(console.error);
-
-function slog(m) {
-  console.log("[" + new Date().toISOString() + "] [" + POD_HOSTNAME + "] " + m);
-}
-
-// ══════════════════════════════════════════════════════════════
-// ── PROMETHEUS METRICS ──────────────────────────────────────
-// ══════════════════════════════════════════════════════════════
-// Registry riêng cho app này (không dùng global register mặc định
-// để tránh trùng metric khi hot-reload trong dev).
-const metricsRegistry = new promClient.Registry();
-
-// Thu thập sẵn các metric mặc định của Node.js process:
-//   process_cpu_seconds_total, process_resident_memory_bytes,
-//   nodejs_heap_size_used_bytes, nodejs_eventloop_lag_seconds, ...
-promClient.collectDefaultMetrics({
-  register: metricsRegistry,
-  prefix: "",
-});
-
-// http_requests_total{method,route,status} — đếm tổng số request
-const httpRequestsTotal = new promClient.Counter({
-  name: "http_requests_total",
-  help: "Tổng số HTTP request đã nhận",
-  labelNames: ["method", "route", "status"],
-  registers: [metricsRegistry],
-});
-
-// response_time (giây) — histogram đo thời gian xử lý mỗi request
-// Prometheus dùng histogram này để tính request_per_second qua
-// rate(response_time_seconds_count[1m]) trong Grafana.
-const responseTimeSeconds = new promClient.Histogram({
-  name: "response_time_seconds",
-  help: "Thời gian phản hồi mỗi HTTP request (giây)",
-  labelNames: ["method", "route", "status"],
-  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5],
-  registers: [metricsRegistry],
-});
-
-// redis_connection_status — 1 = đang kết nối, 0 = mất kết nối
-const redisConnectionStatus = new promClient.Gauge({
-  name: "redis_connection_status",
-  help: "Trạng thái kết nối Redis (1=connected, 0=disconnected)",
-  registers: [metricsRegistry],
-});
-redisConnectionStatus.set(0);
-
-// current_pod_count — số Pod đang "alive" (heartbeat < 8s), lấy
-// từ Redis nên mọi Pod đều báo cáo cùng một con số thống nhất.
-const currentPodCount = new promClient.Gauge({
-  name: "current_pod_count",
-  help: "Số lượng Pod hiện đang hoạt động (heartbeat còn sống)",
-  registers: [metricsRegistry],
-});
-
-// event_loop_delay_seconds — độ trễ event loop, cảnh báo khi
-// Node.js bị nghẽn xử lý (CPU-bound hoặc quá tải).
-const eventLoopDelaySeconds = new promClient.Gauge({
-  name: "event_loop_delay_seconds",
-  help: "Độ trễ trung bình của Node.js event loop (giây)",
-  registers: [metricsRegistry],
-});
-const elDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
-elDelayHistogram.enable();
-setInterval(() => {
-  // .mean tính bằng nanosecond -> đổi ra giây
-  eventLoopDelaySeconds.set(elDelayHistogram.mean / 1e9);
-  elDelayHistogram.reset();
-}, 5000);
-
-// Cập nhật redis_connection_status theo sự kiện thật của client
-store.on("connect", () => redisConnectionStatus.set(1));
-store.on("ready", () => redisConnectionStatus.set(1));
-store.on("end", () => redisConnectionStatus.set(0));
-store.on("error", () => redisConnectionStatus.set(0));
-
-// Cập nhật current_pod_count mỗi 5s bằng cách đọc heartbeat trong Redis
-setInterval(async () => {
-  try {
-    const hb = (await store.hGetAll("pod_hb")) || {};
-    const now = Date.now();
-    const aliveCount = Object.values(hb).filter(
-      (t) => now - parseInt(t) < 8000,
-    ).length;
-    currentPodCount.set(aliveCount);
-  } catch {}
-}, 5000);
-
-// ── Heartbeat ────────────────────────────────────────────────
-setInterval(async () => {
-  try {
-    await store.hSet("pod_hb", POD_HOSTNAME, Date.now().toString());
-  } catch {}
-}, 2000);
-
-// ── Label Pod-1, Pod-2... ────────────────────────────────────
-let MY_LABEL = null;
-async function initLabel() {
-  const ex = await store.hGet("pod_labels", POD_HOSTNAME).catch(() => null);
-  if (ex) {
-    MY_LABEL = ex;
-    return;
-  }
-  const n = await store.incr("pod_label_counter");
-  MY_LABEL = "Pod-" + n;
-  await store.hSet("pod_labels", POD_HOSTNAME, MY_LABEL).catch(() => {});
-  slog("Label: " + MY_LABEL);
-}
-initLabel();
-
-// ── SSE broadcast ────────────────────────────────────────────
-const clients = new Set();
-function broadcast(data) {
-  const msg = "data: " + JSON.stringify(data) + "\n\n";
-  for (const c of clients) {
-    try {
-      c.write(msg);
-    } catch {}
-  }
-}
-
-// ── HTML (k8s-demo.html + SSE bridge, embedded) ─────────────
-const HTML = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
@@ -300,25 +167,6 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 @keyframes countUp{from{transform:translateY(8px);opacity:0;}to{transform:translateY(0);opacity:1;}}
 .tick{display:inline-block;animation:countUp .2s ease;}
 
-.tab-btn{border:none;border-radius:999px;padding:10px 18px;font-weight:700;font-size:.85rem;cursor:pointer;transition:.2s;background:rgba(255,255,255,.1);color:#fff;margin-right:6px;}
-.tab-btn.active{background:#ffffff;color:#1f2937;}
-.tab-btn:hover{background:rgba(255,255,255,.2);}
-.page-tabs{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px;}
-.page-view{display:none;}
-.page-view.active{display:block;}
-.card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px;}
-@media(max-width:900px){.card-grid{grid-template-columns:1fr;}}
-.metric-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;min-height:120px;display:flex;flex-direction:column;justify-content:space-between;}
-.metric-title{font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
-.metric-value{font-size:2rem;font-weight:800;color:var(--blue);}
-.metric-sub{font-size:.78rem;color:var(--muted);margin-top:6px;}
-.chart-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;}
-.chart-title{font-size:.9rem;font-weight:800;margin-bottom:12px;}
-.chart-canvas{width:100%;height:320px;}
-.stat-list{display:grid;gap:10px;}
-.stat-item{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;justify-content:space-between;align-items:center;}
-.stat-item span{font-size:.78rem;color:var(--muted);}
-
 /* footer */
 .footer{text-align:center;padding:20px;font-size:.7rem;color:var(--muted);}
 </style>
@@ -333,19 +181,15 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <h1>☸ Kubernetes — Flash Sale Demo</h1>
     <p>Website thương mại điện tử | Mô phỏng 4 tính chất cốt lõi của Kubernetes</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-      <span class="k8s-badge"><span class="live-dot"></span> Cluster </span>
-      <span class="k8s-badge"> Redis</span>
-      <span class="k8s-badge">⚙ HPA</span>
-    </div>
-    <div class="page-tabs" id="page-tabs">
-      <button class="tab-btn active" data-page="demo" onclick="showPage('demo')">Demo</button>
-      <button class="tab-btn" data-page="admin" onclick="showPage('admin')">Admin Dashboard</button>
-      <button class="tab-btn" data-page="analytics" onclick="showPage('analytics')">Analytics</button>
+      <span class="k8s-badge"><span class="live-dot"></span> Cluster đang chạy</span>
+      <span class="k8s-badge">📦 Redis: shared state</span>
+      <span class="k8s-badge">⚙ HPA: min 3 / max 30</span>
     </div>
   </div>
 </div>
+
 <div class="main">
-<div id="page-demo" class="page-view active">
+
 <!-- ── SCENARIO BAR ── -->
 <div class="scenario-bar">
   <div class="scenario-info">
@@ -367,7 +211,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 </div>
 
 <div class="g2" style="margin-bottom:16px;">
-  <div class="stat-card"><div class="stat-label">Tổng Requests</div><div class="stat-value" id="total-req">0</div><div class="stat-sub"></div></div>
+  <div class="stat-card"><div class="stat-label">Tổng Requests</div><div class="stat-value" id="total-req">0</div><div class="stat-sub">Lưu trong Redis (shared state)</div></div>
   <div class="stat-card"><div class="stat-label">Pods Đang Chạy</div><div class="stat-value" id="pod-count-val" style="color:var(--green)">3</div><div class="stat-sub">Kubernetes duy trì tự động</div></div>
 </div>
 
@@ -379,72 +223,60 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">1</div>
     <div>
       <div class="section-title">Quản Lý Khai Báo (Declarative Configuration)</div>
-     
+      <div class="section-sub">DevOps viết file YAML → K8s tự quản lý — không cần ra lệnh thủ công</div>
     </div>
   </div>
 
-  
+  <div class="notice">💡 DevOps chỉ cần khai báo <b>"trạng thái mong muốn"</b> trong file YAML. K8s đọc file đó và tự động làm mọi thứ để đạt được trạng thái đó — và duy trì nó mãi mãi.</div>
 
-  <!-- Cấu hình khai báo — dạng thẻ gọn -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-
-    <!-- TRÁI: Desired State từ YAML -->
+  <div class="g2">
     <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:10px;letter-spacing:.5px;">📋 DESIRED STATE — DevOps khai báo</div>
-
-      <!-- 3 thẻ config chính -->
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
-        <div style="display:flex;align-items:center;gap:10px;background:var(--blue-bg);border:1px solid var(--blue-bd);border-radius:8px;padding:10px 14px;">
-          <div style="font-size:1.5rem;font-weight:900;color:var(--blue);font-family:monospace;width:36px;text-align:center;" id="yaml-replicas">3</div>
-          <div>
-            <div style="font-size:.75rem;font-weight:700;color:var(--blue);">replicas: 3</div>
-       
-          </div>
-          <div style="margin-left:auto;font-size:.6rem;background:var(--blue);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">Deployment</div>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:10px;background:var(--orange-bg);border:1px solid var(--orange-bd);border-radius:8px;padding:10px 14px;">
-          <div style="font-size:1.5rem;font-weight:900;color:var(--orange);font-family:monospace;width:36px;text-align:center;">50%</div>
-          <div>
-            <div style="font-size:.75rem;font-weight:700;color:var(--orange);">targetCPU: 50%</div>
-          
-          </div>
-          <div style="margin-left:auto;font-size:.6rem;background:var(--orange);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">HPA</div>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:10px;background:var(--green-bg);border:1px solid var(--green-bd);border-radius:8px;padding:10px 14px;">
-          <div style="font-size:.85rem;font-weight:900;color:var(--green);font-family:monospace;width:36px;text-align:center;">3→10</div>
-          <div>
-            <div style="font-size:.75rem;font-weight:700;color:var(--green);">min: 3 / max: 10 Pods</div>
-          
-          </div>
-          <div style="margin-left:auto;font-size:.6rem;background:var(--green);color:#fff;padding:2px 7px;border-radius:4px;font-weight:700;">HPA</div>
-        </div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:6px;">FILE YAML — DevOps khai báo</div>
+      <div class="yaml-box">
+        <span class="yaml-live">LIVE</span>
+        <span class="c">---</span><br>
+        <span class="k">kind:</span> <span class="v">Deployment</span><br>
+        <span class="k">metadata:</span><br>
+        &nbsp;&nbsp;<span class="k">name:</span> <span class="v">shop-api</span><br>
+        <span class="k">spec:</span><br>
+        &nbsp;&nbsp;<span class="k">replicas:</span> <span class="n" id="yaml-replicas">3</span>&nbsp;&nbsp;<span class="c"># K8s giữ đúng số này</span><br>
+        &nbsp;&nbsp;<span class="k">selector:</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="k">matchLabels:</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">app:</span> <span class="v">shop-api</span><br>
+        &nbsp;&nbsp;<span class="k">template:</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="k">spec:</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">containers:</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">- image:</span> <span class="v">shop-api:2.1</span><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">resources.requests.cpu:</span> <span class="n">100m</span><br>
+        <br>
+        <span class="c">---</span><br>
+        <span class="k">kind:</span> <span class="v">HorizontalPodAutoscaler</span><br>
+        &nbsp;&nbsp;<span class="k">minReplicas:</span> <span class="n">3</span><br>
+        &nbsp;&nbsp;<span class="k">maxReplicas:</span> <span class="n">30</span><br>
+        &nbsp;&nbsp;<span class="k">targetCPU:</span> <span class="n">50%</span>
       </div>
-
-      <!-- kubectl apply arrow -->
-      
+      <div class="apply-arrow">kubectl apply -f deployment.yaml</div>
+      <div class="k8s-engine">
+        <div class="k8s-engine-title">☸ Kubernetes Control Plane</div>
+        <div class="k8s-engine-sub">Liên tục so sánh <b>desired state</b> vs <b>actual state</b><br>và tự hành động để khớp</div>
+      </div>
     </div>
-
-    <!-- PHẢI: Actual State + Reconciliation -->
     <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:10px;letter-spacing:.5px;">⚙ ACTUAL STATE — K8s thực thi</div>
-
-      <!-- Desired vs Actual -->
-      <div class="desired-state" id="desired-state-grid" style="margin-bottom:12px;"><!-- Filled by JS --></div>
-
-      <!-- Reconciliation loop -->
-      <div style="background:var(--bg);border-radius:8px;border:1px solid var(--border);padding:12px;margin-bottom:12px;">
-        <div style="font-size:.68rem;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">⟳ Reconciliation Loop</div>
-        <div id="reconcile-log" style="font-size:.7rem;line-height:2;color:var(--text);">
-          <div><b>Desired:</b> 3 replicas &nbsp;|&nbsp; <b>Actual:</b> <span id="rc-actual">3</span> replicas</div>
-          <div id="rc-action" style="color:var(--green);">✓ Trạng thái khớp — không cần hành động</div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">TRẠNG THÁI THỰC TẾ (Actual State)</div>
+      <div class="desired-state" id="desired-state-grid">
+        <!-- Filled by JS -->
+      </div>
+      <div style="margin-top:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);padding:12px;">
+        <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:8px;">RECONCILIATION LOOP</div>
+        <div id="reconcile-log" style="font-size:.68rem;line-height:1.8;color:var(--text);">
+          <div>✅ <b>Desired:</b> 3 replicas &nbsp;|&nbsp; <b>Actual:</b> <span id="rc-actual">3</span> replicas</div>
+          <div id="rc-action" style="color:var(--green);">✅ Trạng thái khớp — không cần hành động</div>
         </div>
       </div>
-
-      <!-- Thử xóa pod -->
-      <div style="font-size:.7rem;color:var(--muted);margin-bottom:6px;">Thử xóa 1 Pod — K8s sẽ tự tạo lại:</div>
-      <button class="btn btn-red btn-sm" onclick="manualDelete()"> Delete Pod</button>
+      <div style="margin-top:10px;">
+        <div style="font-size:.7rem;color:var(--muted);margin-bottom:6px;">Thử xóa 1 Pod thủ công (K8s sẽ tự tạo lại):</div>
+        <button class="btn btn-red btn-sm" onclick="manualDelete()">🗑 kubectl delete pod shop-api-xxx</button>
+      </div>
     </div>
   </div>
 </div>
@@ -457,7 +289,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--orange-bg);color:var(--orange);">2</div>
     <div>
       <div class="section-title">Tự Động Co Giãn — HPA (Horizontal Pod Autoscaler)</div>
-  
+      <div class="section-sub">CPU > 50% → K8s tự nhân bản Pod lên đến 30 | CPU thấp → tự thu hồi về 3</div>
     </div>
   </div>
 
@@ -488,7 +320,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
         <div id="pod-grid"></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-        <button class="btn btn-orange btn-sm" onclick="startStress()"> Stress CPU (Flash Sale)</button>
+        <button class="btn btn-orange btn-sm" onclick="startStress()">🔥 Stress CPU (Flash Sale)</button>
         <button class="btn btn-gray btn-sm" id="stop-stress-btn" onclick="stopStress()" disabled>⏹ Dừng Stress</button>
       </div>
     </div>
@@ -515,7 +347,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">3</div>
     <div>
       <div class="section-title">Cân Bằng Tải (Load Balancing)</div>
-    
+      <div class="section-sub">K8s Service tự động chia đều request vào tất cả Pods — không Pod nào bị quá tải</div>
     </div>
   </div>
 
@@ -532,8 +364,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
       <div style="font-size:.7rem;font-weight:700;color:var(--muted);margin-bottom:10px;">PHÂN PHỐI REQUEST VÀO PODS</div>
       <div id="lb-pods" style="display:flex;gap:6px;align-items:flex-end;min-height:120px;"></div>
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
-        <button class="btn btn-blue btn-sm" onclick="sendOneRequest()"> Gửi 1 Request</button>
-        <button class="btn btn-blue" onclick="sendBurst()"> Gửi 100 Requests</button>
+        <button class="btn btn-blue btn-sm" onclick="sendOneRequest()">📤 Gửi 1 Request</button>
+        <button class="btn btn-blue" onclick="sendBurst()">⚡ Gửi 100 Requests</button>
       </div>
     </div>
     <div>
@@ -560,7 +392,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:var(--red-bg);color:var(--red);">4</div>
     <div>
       <div class="section-title">Tự Phục Hồi (Self-Healing)</div>
-  
+      <div class="section-sub">Pod sập → K8s phát hiện trong 5s → tạo Pod mới thay thế → 0 downtime</div>
     </div>
   </div>
 
@@ -570,7 +402,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <span class="flow-step" id="shf2">Liveness Probe Fail</span><span class="flow-arr">→</span>
     <span class="flow-step" id="shf3">Xóa Pod</span><span class="flow-arr">→</span>
     <span class="flow-step" id="shf4">Tạo Pod Mới</span><span class="flow-arr">→</span>
-    <span class="flow-step" id="shf5"> Healthy</span>
+    <span class="flow-step" id="shf5">✅ Healthy</span>
   </div>
 
   <div class="g2">
@@ -579,8 +411,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
       <div id="kill-list"></div>
       <div id="heal-status" style="margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px;font-size:.72rem;font-family:monospace;min-height:44px;line-height:1.7;color:var(--muted);">— Chưa có sự kiện</div>
       <div style="margin-top:12px;background:var(--red-bg);border:1px solid var(--red-bd);border-radius:7px;padding:10px;">
-        
-      
+        <div style="font-size:.72rem;font-weight:700;color:var(--red);margin-bottom:4px;">Tại sao Pod mới kế thừa requests?</div>
+        <div style="font-size:.68rem;color:#7f1d1d;line-height:1.6;">Trong K8s thật, shared state (đơn hàng, giỏ hàng) được lưu ở <b>Redis / Database</b> — không phải trong Pod. Pod chỉ là "máy tính" xử lý. Pod mới khởi động, kết nối vào Redis, thấy đầy đủ dữ liệu và tiếp tục xử lý.</div>
       </div>
     </div>
     <div>
@@ -614,7 +446,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
         </div>
         <div class="tl-item" id="tl5">
           <div class="tl-dot"></div>
-          <div class="tl-head"> Online — Pod kế thừa state từ Redis</div>
+          <div class="tl-head">✅ Online — Pod kế thừa state từ Redis</div>
           <div class="tl-body" id="tl5-body">Hệ thống phục hồi hoàn toàn, 0 data loss</div>
         </div>
       </div>
@@ -628,110 +460,20 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="section-num" style="background:#0f172a;color:#38bdf8;">⬛</div>
     <div>
       <div class="section-title">Real-Time Event Log</div>
-     
+      <div class="section-sub">kubectl logs / kubectl get events</div>
     </div>
   </div>
   <div id="log"></div>
 </div>
 
-</div>
-</div>
-
-<div id="page-admin" class="page-view">
-  <div class="section">
-    <div class="section-head">
-      <div class="section-num" style="background:var(--blue-bg);color:var(--blue);">A</div>
-      <div>
-        <div class="section-title">Admin Dashboard</div>
-        <div class="section-sub">Tổng quan cluster, Redis, HPA và trạng thái hiện tại</div>
-      </div>
-    </div>
-    <div class="card-grid">
-      <div class="metric-card">
-        <div class="metric-title">Pods</div>
-        <div class="metric-value" id="admin-pods">3</div>
-        <div class="metric-sub">Số pod đang hoạt động</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">CPU</div>
-        <div class="metric-value" id="admin-cpu">8%</div>
-        <div class="metric-sub">CPU sử dụng trung bình</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Memory</div>
-        <div class="metric-value" id="admin-mem">120Mi</div>
-        <div class="metric-sub">Memory ước lượng</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Requests</div>
-        <div class="metric-value" id="admin-req">0</div>
-        <div class="metric-sub">Tổng số request đã ghi</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">Redis</div>
-        <div class="metric-value" id="admin-redis">Connected</div>
-        <div class="metric-sub">Trạng thái kết nối Redis</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">HPA</div>
-        <div class="metric-value" id="admin-hpa">IDLE</div>
-        <div class="metric-sub">Trạng thái HPA hiện tại</div>
-      </div>
-    </div>
-    <div class="section">
-      <div class="section-head">
-        <div class="section-num" style="background:var(--orange-bg);color:var(--orange);">S</div>
-        <div>
-          <div class="section-title">Cluster Status</div>
-          <div class="section-sub">Tổng quan sức khỏe cluster và các pod</div>
-        </div>
-      </div>
-      <div class="stat-list">
-        <div class="stat-item"><strong>Service</strong><span id="admin-status">Healthy</span></div>
-        <div class="stat-item"><strong>Redis Heartbeat</strong><span id="admin-redis-heartbeat">Live</span></div>
-        <div class="stat-item"><strong>Pod Count</strong><span id="admin-pod-count">3</span></div>
-        <div class="stat-item"><strong>Refresh</strong><span>cập nhật mỗi giây</span></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div id="page-analytics" class="page-view">
-  <div class="section">
-    <div class="section-head">
-      <div class="section-num" style="background:var(--green-bg);color:var(--green);">B</div>
-      <div>
-        <div class="section-title">Analytics</div>
-        <div class="section-sub">Biểu đồ theo thời gian cho request, CPU, memory và số pod</div>
-      </div>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Requests theo thời gian</div>
-      <canvas id="chart-requests" class="chart-canvas"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">CPU theo thời gian</div>
-      <canvas id="chart-cpu" class="chart-canvas"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Memory theo thời gian</div>
-      <canvas id="chart-mem" class="chart-canvas"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Pod Count theo thời gian</div>
-      <canvas id="chart-pods" class="chart-canvas"></canvas>
-    </div>
-  </div>
-</div>
-
-<div class="footer">☸ Kubernetes Demo </div>
+<div class="footer">☸ Kubernetes Flash Sale Demo — Mô phỏng giáo dục</div>
 </div><!-- /main -->
 
 <script>
 // ════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════
-const MAX_PODS = 10, INIT_PODS = 3;
+const MAX_PODS = 30, INIT_PODS = 3;
 let podCounter = 0;
 let pods = [];           // {num, id, status:'alive'|'dead'|'boot', hits}
 let usedNums = new Set();
@@ -742,16 +484,6 @@ let stressIv = null, sdTimer = null, scaleIv = null;
 let healLock = false;
 let scenario = 'normal'; // 'normal' | 'flash'
 let trafficIv = null;
-let isRedisConnected = false;
-let redisStatus = false;
-
-const HISTORY_LENGTH = 24;
-const requestHistory = Array(HISTORY_LENGTH).fill(0);
-const cpuHistory = Array(HISTORY_LENGTH).fill(8);
-const memHistory = Array(HISTORY_LENGTH).fill(120);
-const podHistory = Array(HISTORY_LENGTH).fill(3);
-let historyIndex = 0;
-let lastRequestCount = 0;
 
 function nextNum() {
   for (let i = podCounter + 1; i <= 999; i++) {
@@ -834,102 +566,8 @@ function render() {
   renderKillList();
   renderDesiredState();
   updateHPAUI();
-  updateAdminMetrics();
-  updateAnalyticsHistory();
   document.getElementById('total-req').textContent = totalRequests.toLocaleString();
   document.getElementById('pod-count-val').textContent = pods.filter(p=>p.status!=='dead').length;
-}
-
-function updateAdminMetrics() {
-  const aliveCount = pods.filter(p=>p.status!=='dead').length;
-  document.getElementById('admin-pods').textContent = aliveCount;
-  document.getElementById('admin-cpu').textContent = Math.round(hpaCpu) + '%';
-  document.getElementById('admin-mem').textContent = Math.round(memHistory[(historyIndex-1+HISTORY_LENGTH)%HISTORY_LENGTH]) + 'Mi';
-  document.getElementById('admin-req').textContent = totalRequests.toLocaleString();
-  document.getElementById('admin-redis').textContent = redisStatus ? 'Connected' : 'Disconnected';
-  document.getElementById('admin-hpa').textContent = hpaPhase.toUpperCase();
-  document.getElementById('admin-status').textContent = 'Healthy';
-  document.getElementById('admin-redis-heartbeat').textContent = redisStatus ? 'Live' : 'Down';
-  document.getElementById('admin-pod-count').textContent = aliveCount;
-}
-
-function showPage(page) {
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.page === page);
-  });
-  document.querySelectorAll('.page-view').forEach(view => {
-    view.classList.toggle('active', view.id === 'page-' + page);
-  });
-  if (page === 'analytics') renderCharts();
-}
-
-function updateAnalyticsHistory() {
-  const aliveCount = pods.filter(p=>p.status!=='dead').length;
-  requestHistory[historyIndex] = Math.max(0, totalRequests - lastRequestCount);
-  cpuHistory[historyIndex] = Math.round(hpaCpu);
-  memHistory[historyIndex] = 120 + aliveCount * 8;
-  podHistory[historyIndex] = aliveCount;
-  lastRequestCount = totalRequests;
-  historyIndex = (historyIndex + 1) % HISTORY_LENGTH;
-}
-
-function drawLineChart(canvasId, data, color, title) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  const padding = 32;
-  const innerW = width - padding * 2;
-  const innerH = height - padding * 2;
-  const max = Math.max(...data, 1);
-  const min = Math.min(...data, 0);
-  const range = Math.max(max - min, 1);
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padding + (innerH * i) / 4;
-    ctx.beginPath();
-    ctx.moveTo(padding, y);
-    ctx.lineTo(width - padding, y);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  data.forEach((value, idx) => {
-    const x = padding + (innerW * idx) / Math.max(data.length - 1, 1);
-    const y = padding + innerH * (1 - (value - min) / range);
-    if (idx === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-  ctx.fillStyle = color;
-  data.forEach((value, idx) => {
-    const x = padding + (innerW * idx) / Math.max(data.length - 1, 1);
-    const y = padding + innerH * (1 - (value - min) / range);
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.fillStyle = '#0f172a';
-  ctx.font = '700 14px system-ui';
-  ctx.fillText(title, padding, 22);
-  ctx.fillStyle = '#64748b';
-  ctx.font = '600 11px system-ui';
-  ctx.fillText('min: ' + min + ' max: ' + max, padding, height - 12);
-}
-
-function renderCharts() {
-  drawLineChart('chart-requests', requestHistory, '#2563eb', 'Requests / sec');
-  drawLineChart('chart-cpu', cpuHistory, '#16a34a', 'CPU %');
-  drawLineChart('chart-mem', memHistory, '#7c3aed', 'Memory Mi');
-  drawLineChart('chart-pods', podHistory, '#ea580c', 'Pod Count');
 }
 
 function renderPodGrid() {
@@ -937,7 +575,7 @@ function renderPodGrid() {
   const sorted = [...pods].sort((a,b)=>a.num-b.num);
   g.innerHTML = sorted.map(p => {
     const cls = p.status==='alive'?'alive':p.status==='boot'?'boot':'dead';
-    return \`<div class="pod-dot \${cls}" title="\${p.id} (\${p.status}) \${p.hits} reqs">\${p.num}</div>\`;
+    return `<div class="pod-dot ${cls}" title="${p.id} (${p.status}) ${p.hits} reqs">${p.num}</div>`;
   }).join('');
 }
 
@@ -948,40 +586,40 @@ function renderLB() {
   lbEl.innerHTML = alive.map(p => {
     const pct = Math.round(p.hits / maxH * 100);
     const c = podColor(p.id);
-    return \`<div class="lb-pod" style="min-width:40px;flex:1;">
-      <div class="lb-hit-count" style="color:\${c}">\${p.hits}</div>
+    return `<div class="lb-pod" style="min-width:40px;flex:1;">
+      <div class="lb-hit-count" style="color:${c}">${p.hits}</div>
       <div class="lb-bar-wrap">
-        <div class="lb-bar-fill" style="height:\${pct}%;background:\${c};"></div>
+        <div class="lb-bar-fill" style="height:${pct}%;background:${c};"></div>
       </div>
-      <div class="lb-pod-label" style="color:\${c}">\${p.id}</div>
+      <div class="lb-pod-label" style="color:${c}">${p.id}</div>
       <div class="lb-status live">LIVE</div>
-    </div>\`;
+    </div>`;
   }).join('');
 
   // stats
   const total = alive.reduce((s,p)=>s+p.hits,0)||1;
   document.getElementById('lb-stats').innerHTML = alive.map(p => {
     const pct = Math.round(p.hits/total*100);
-    return \`<div style="display:flex;align-items:center;gap:6px;font-size:.68rem;">
-      <span style="width:52px;font-weight:700;font-family:monospace;color:\${podColor(p.id)}">\${p.id}</span>
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:.68rem;">
+      <span style="width:52px;font-weight:700;font-family:monospace;color:${podColor(p.id)}">${p.id}</span>
       <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
-        <div style="height:100%;width:\${pct}%;background:\${podColor(p.id)};border-radius:4px;transition:width .4s;"></div>
+        <div style="height:100%;width:${pct}%;background:${podColor(p.id)};border-radius:4px;transition:width .4s;"></div>
       </div>
-      <span style="width:30px;text-align:right;font-family:monospace;font-weight:700;">\${p.hits}</span>
-      <span style="width:32px;text-align:right;color:var(--muted);">\${pct}%</span>
-    </div>\`;
+      <span style="width:30px;text-align:right;font-family:monospace;font-weight:700;">${p.hits}</span>
+      <span style="width:32px;text-align:right;color:var(--muted);">${pct}%</span>
+    </div>`;
   }).join('');
 }
 
 function renderKillList() {
   const alive = pods.filter(p=>p.status==='alive').sort((a,b)=>a.num-b.num);
   document.getElementById('kill-list').innerHTML = alive.length
-    ? alive.map(p => \`
+    ? alive.map(p => `
       <div class="kill-row">
-        <div style="flex:1;font-size:.72rem;font-weight:700;font-family:monospace;color:\${podColor(p.id)};">\${p.id} <span style="color:var(--muted);font-weight:400;">\${p.hits} reqs</span></div>
+        <div style="flex:1;font-size:.72rem;font-weight:700;font-family:monospace;color:${podColor(p.id)};">${p.id} <span style="color:var(--muted);font-weight:400;">${p.hits} reqs</span></div>
         <span class="tag tag-green">LIVE</span>
-        <button class="kill-btn" onclick="killPod('\${p.id}')" \${healLock?'disabled':''}>💥 Crash</button>
-      </div>\`).join('')
+        <button class="kill-btn" onclick="killPod('${p.id}')" ${healLock?'disabled':''}>💥 Crash</button>
+      </div>`).join('')
     : '<div style="color:var(--muted);font-size:.75rem;padding:8px;">Không có pod alive</div>';
 }
 
@@ -989,25 +627,25 @@ function renderDesiredState() {
   const alive = pods.filter(p=>p.status==='alive').length;
   const desired = INIT_PODS;
   const ok = alive >= desired;
-  document.getElementById('desired-state-grid').innerHTML = \`
-    <div class="state-item \${ok?'ok':'warn'}">
-      <div class="si-val">\${desired}</div>
+  document.getElementById('desired-state-grid').innerHTML = `
+    <div class="state-item ${ok?'ok':'warn'}">
+      <div class="si-val">${desired}</div>
       <div class="si-label">Desired Replicas</div>
     </div>
-    <div class="state-item \${ok?'ok':'warn'}">
-      <div class="si-val">\${alive}</div>
+    <div class="state-item ${ok?'ok':'warn'}">
+      <div class="si-val">${alive}</div>
       <div class="si-label">Actual Alive</div>
     </div>
-    <div class="state-item \${ok?'ok':'warn'}">
-      <div class="si-val">\${ok?'':'⚠'}</div>
-      <div class="si-label">\${ok?'In Sync':'Reconciling'}</div>
-    </div>\`;
+    <div class="state-item ${ok?'ok':'warn'}">
+      <div class="si-val">${ok?'✅':'⚠'}</div>
+      <div class="si-label">${ok?'In Sync':'Reconciling'}</div>
+    </div>`;
 
   document.getElementById('rc-actual').textContent = alive;
   const rcAct = document.getElementById('rc-action');
   if (ok) {
     rcAct.style.color = 'var(--green)';
-    rcAct.textContent = ' Trạng thái khớp — không cần hành động';
+    rcAct.textContent = '✅ Trạng thái khớp — không cần hành động';
   } else {
     rcAct.style.color = 'var(--orange)';
     rcAct.textContent = '⚙ Đang tạo Pod mới để đủ '+desired+' replicas...';
@@ -1075,7 +713,7 @@ function sendOneRequest() {
   if (!p) { toast('Không có pod alive!','red',2000); return; }
   p.hits++;
   totalRequests++;
-  log(\`📤 Request → \${p.id} (total: \${totalRequests}, pod hits: \${p.hits})\`, '#7dd3fc');
+  log(`📤 Request → ${p.id} (total: ${totalRequests}, pod hits: ${p.hits})`, '#7dd3fc');
   render();
 }
 
@@ -1091,8 +729,8 @@ async function sendBurst() {
     if (i % 10 === 0) { render(); await sleep(30); }
   }
   render();
-  log(\` 100 requests xong! Total: \${totalRequests}\`, '#4ade80');
-  toast(' 100 requests phân phối đều vào '+pods.filter(p=>p.status==='alive').length+' Pods', 'green', 3000);
+  log(`✅ 100 requests xong! Total: ${totalRequests}`, '#4ade80');
+  toast('✅ 100 requests phân phối đều vào '+pods.filter(p=>p.status==='alive').length+' Pods', 'green', 3000);
   btn.disabled = false; btn.textContent = '⚡ Gửi 100 Requests';
 }
 
@@ -1104,9 +742,9 @@ function startStress() {
   const btn = document.getElementById('stop-stress-btn');
   btn.disabled = false;
   hpaCpu = 8; hpaPhase = 'idle';
-  log(' CPU Stress bắt đầu — HPA đang theo dõi CPU...', '#fbbf24');
+  log('🔥 CPU Stress bắt đầu — HPA đang theo dõi CPU...', '#fbbf24');
   hpaLog('INFO: CPU utilization monitoring started');
-  toast(' CPU tăng! HPA sẽ scale up...', 'orange', 3000);
+  toast('🔥 CPU tăng! HPA sẽ scale up...', 'orange', 3000);
 
   let t = 0;
   stressIv = setInterval(() => {
@@ -1117,8 +755,8 @@ function startStress() {
       if (hpaCpu > 50 && hpaPhase === 'idle') {
         hpaPhase = 'scaling_up';
         flowSet('hf',[0,1,2],'orange');
-        hpaLog(\`WARNING: CPU \${Math.round(hpaCpu)}% > 50% threshold → triggering scale up\`, '#fbbf24');
-        log(\`⚠ HPA: CPU \${Math.round(hpaCpu)}% > 50% → scale up kích hoạt!\`, '#fbbf24');
+        hpaLog(`WARNING: CPU ${Math.round(hpaCpu)}% > 50% threshold → triggering scale up`, '#fbbf24');
+        log(`⚠ HPA: CPU ${Math.round(hpaCpu)}% > 50% → scale up kích hoạt!`, '#fbbf24');
       }
     } else if (t <= 20) {
       const alive = pods.filter(p=>p.status==='alive').length;
@@ -1130,7 +768,7 @@ function startStress() {
         flowSet('hf',[0,1,2,3],'orange');
         flowSet('hf',[4],'green');
         hpaLog('INFO: CPU below threshold → scale down cooldown 3s', '#a5f3fc');
-        log(' CPU thấp → HPA bắt đầu scale down...', '#a78bfa');
+        log('📉 CPU thấp → HPA bắt đầu scale down...', '#a78bfa');
         startScaleDown();
       }
     }
@@ -1145,18 +783,18 @@ function startStress() {
         const nid = 'Pod-'+n;
         const obj = { num:n, id:nid, status:'boot', hits:0 };
         pods.push(obj);
-        hpaLog(\`INFO: Scaling up → creating \${nid} (replicas: \${cur+i+1}/\${MAX_PODS})\`, '#a5f3fc');
-        log(\`➕ HPA tạo \${nid} (CPU:\${Math.round(hpaCpu)}%, Pods: \${cur+i+1})\`, '#a78bfa');
+        hpaLog(`INFO: Scaling up → creating ${nid} (replicas: ${cur+i+1}/${MAX_PODS})`, '#a5f3fc');
+        log(`➕ HPA tạo ${nid} (CPU:${Math.round(hpaCpu)}%, Pods: ${cur+i+1})`, '#a78bfa');
         const _n = n;
         setTimeout(() => {
           const p = pods.find(x=>x.num===_n && x.status==='boot');
-          if (p) { p.status='alive'; render(); hpaLog(\`INFO: \${nid} → Running\`, '#4ade80'); }
+          if (p) { p.status='alive'; render(); hpaLog(`INFO: ${nid} → Running`, '#4ade80'); }
         }, 1500);
       }
       if (pods.filter(p=>p.status!=='dead').length >= MAX_PODS) {
         hpaPhase = 'max';
-        hpaLog(\`WARNING: Reached maxReplicas=\${MAX_PODS}\`, '#f87171');
-        log(\` Đạt max \${MAX_PODS} Pods!\`, '#f87171');
+        hpaLog(`WARNING: Reached maxReplicas=${MAX_PODS}`, '#f87171');
+        log(`🚀 Đạt max ${MAX_PODS} Pods!`, '#f87171');
         flowSet('hf',[0,1,2,3],'red');
       }
     }
@@ -1190,17 +828,17 @@ function startScaleDown() {
         clearInterval(iv); sdTimer = null;
         hpaPhase='idle'; hpaCpu=8;
         flowReset('hf', 5);
-        hpaLog(\`INFO: Scale down complete → \${INIT_PODS} replicas (minReplicas)\`, '#4ade80');
-        log(\` Scale down xong → \${INIT_PODS} Pods (min replicas)\`, '#4ade80');
-        toast(' HPA scale down về '+INIT_PODS+' Pods', 'green', 3000);
+        hpaLog(`INFO: Scale down complete → ${INIT_PODS} replicas (minReplicas)`, '#4ade80');
+        log(`✅ Scale down xong → ${INIT_PODS} Pods (min replicas)`, '#4ade80');
+        toast('✅ HPA scale down về '+INIT_PODS+' Pods', 'green', 3000);
         render(); return;
       }
       // remove simulated pods (highest number first)
       const toRemove = sims.filter(p=>p.num>INIT_PODS).sort((a,b)=>b.num-a.num).slice(0,2);
       for (const p of toRemove) {
         usedNums.delete(p.num);
-        hpaLog(\`INFO: Scaling down → terminating \${p.id}\`, '#a5f3fc');
-        log(\`➖ HPA xóa \${p.id} (CPU thấp, Pods: \${total-1})\`, '#94a3b8');
+        hpaLog(`INFO: Scaling down → terminating ${p.id}`, '#a5f3fc');
+        log(`➖ HPA xóa ${p.id} (CPU thấp, Pods: ${total-1})`, '#94a3b8');
       }
       pods = pods.filter(p=>!toRemove.includes(p));
       render();
@@ -1232,25 +870,25 @@ function killPod(podId) {
   pod.status = 'dead';
   resetTL(); setTL(0,'error');
   flowSet('shf',[0,1],'red');
-  setHeal(\`<span style="color:var(--red)">💀 \${podId} → CRASHED! (đã xử lý \${oldHits} requests)</span>\`);
-  log(\`💀 \${podId} crash! Exit code 1 — liveness probe fail\`, '#f87171');
-  toast(\`💀 \${podId} crashed!\`, 'red', 3000);
+  setHeal(`<span style="color:var(--red)">💀 ${podId} → CRASHED! (đã xử lý ${oldHits} requests)</span>`);
+  log(`💀 ${podId} crash! Exit code 1 — liveness probe fail`, '#f87171');
+  toast(`💀 ${podId} crashed!`, 'red', 3000);
   render();
 
   // t=1s: probe fail
   setTimeout(() => {
     setTL(0,'done'); setTL(1,'active');
     flowSet('shf',[2],'orange');
-    setHeal(\`<span style="color:var(--orange)">🔍 Liveness probe: GET /health → Connection refused (fail 3/3)</span>\`);
-    log(\`🔍 K8s: liveness probe fail x3 → \${podId} đánh dấu Unhealthy\`, '#fbbf24');
+    setHeal(`<span style="color:var(--orange)">🔍 Liveness probe: GET /health → Connection refused (fail 3/3)</span>`);
+    log(`🔍 K8s: liveness probe fail x3 → ${podId} đánh dấu Unhealthy`, '#fbbf24');
   }, 1000);
 
   // t=2s: remove from pool
   setTimeout(() => {
     setTL(1,'done'); setTL(2,'active');
     flowSet('shf',[3],'orange');
-    setHeal(\`<span style="color:var(--orange)"> \${podId} rút khỏi Service pool — không nhận request mới</span>\`);
-    log(\` \${podId} rút khỏi endpoint pool\`, '#fbbf24');
+    setHeal(`<span style="color:var(--orange)">🚫 ${podId} rút khỏi Service pool — không nhận request mới</span>`);
+    log(`🚫 ${podId} rút khỏi endpoint pool`, '#fbbf24');
   }, 2000);
 
   // t=3s: create new
@@ -1265,8 +903,8 @@ function killPod(podId) {
       newPodRef = { num:newNum, id:newId, status:'boot', hits:oldHits };
       pods.push(newPodRef);
       flowSet('shf',[4],'orange');
-      setHeal(\`<span style="color:var(--orange)">🆕 K8s tạo \${newId} — pulling image, khởi động... (kế thừa \${oldHits} reqs từ Redis)</span>\`);
-      log(\` \${newId} boot → thay \${podId} (kế thừa state Redis: \${oldHits} hits)\`, '#fb923c');
+      setHeal(`<span style="color:var(--orange)">🆕 K8s tạo ${newId} — pulling image, khởi động... (kế thừa ${oldHits} reqs từ Redis)</span>`);
+      log(`🆕 ${newId} boot → thay ${podId} (kế thừa state Redis: ${oldHits} hits)`, '#fb923c');
       render();
     }
   }, 3000);
@@ -1282,10 +920,10 @@ function killPod(podId) {
       setTL(3,'done'); setTL(4,'done'); setTL(5,'done');
       flowSet('shf',[5],'green');
       const t5 = document.getElementById('tl5-body');
-      if (t5) t5.textContent = \`\${newPodRef.id} healthy — \${oldHits} hits kế thừa từ Redis\`;
-      setHeal(\`<span style="color:var(--green)"> \${newPodRef.id} LIVE! Hits: \${newPodRef.hits} — đã thay \${podId}. 0 downtime.</span>\`);
-      log(\` Self-Healing: \${newPodRef.id} healthy → thay \${podId} | 0 data loss\`, '#4ade80');
-      toast(\` \${newPodRef.id} thay thế \${podId}! 0 downtime\`, 'green', 4000);
+      if (t5) t5.textContent = `${newPodRef.id} healthy — ${oldHits} hits kế thừa từ Redis`;
+      setHeal(`<span style="color:var(--green)">✅ ${newPodRef.id} LIVE! Hits: ${newPodRef.hits} — đã thay ${podId}. 0 downtime.</span>`);
+      log(`✅ Self-Healing: ${newPodRef.id} healthy → thay ${podId} | 0 data loss`, '#4ade80');
+      toast(`✅ ${newPodRef.id} thay thế ${podId}! 0 downtime`, 'green', 4000);
     }
     healLock = false;
     render();
@@ -1304,8 +942,8 @@ function manualDelete() {
   const alive = pods.filter(p=>p.status==='alive');
   if (!alive.length) { toast('Không có pod để xóa','red',2000); return; }
   const target = alive[0];
-  log(\`🗑 kubectl delete pod \${target.id} → K8s đang reconcile...\`, '#fbbf24');
-  toast(\`K8s phát hiện thiếu 1 replica → đang tạo lại...\`, 'orange', 3000);
+  log(`🗑 kubectl delete pod ${target.id} → K8s đang reconcile...`, '#fbbf24');
+  toast(`K8s phát hiện thiếu 1 replica → đang tạo lại...`, 'orange', 3000);
   killPod(target.id);
 }
 
@@ -1329,7 +967,7 @@ function resetAll() {
   flowReset('hf', 5); flowReset('shf', 6); resetTL();
   render();
   log('↺ Reset về trạng thái ban đầu — 3 Pods, 0 requests', '#38bdf8');
-  toast(' Reset thành công!', 'green', 2000);
+  toast('✅ Reset thành công!', 'green', 2000);
 }
 
 // ════════════════════════════════════════════════
@@ -1351,272 +989,9 @@ setInterval(() => {
 // ── Initial render ──
 render();
 log('☸ Kubernetes cluster khởi động — 3 Pods sẵn sàng', '#4ade80');
-log(' Chọn "⚡ Flash Sale" để xem toàn bộ 4 tính chất hoạt động', '#38bdf8');
+log('📋 Chọn "⚡ Flash Sale" để xem toàn bộ 4 tính chất hoạt động', '#38bdf8');
 hpaLog('INFO: HPA controller started — watching CPU metrics');
-hpaLog('INFO: minReplicas=3 maxReplicas=15 targetCPU=50%');
-</script>
-<script>
-// ════════════════════════════════════════════════════════════════
-// SSE BRIDGE — kết nối Minikube server.js với k8s-demo.html UI
-// Inject vào HTML trước </body> — chạy sau tất cả scripts của page
-// ════════════════════════════════════════════════════════════════
-(function() {
-  // Chờ cho đến khi state vars của k8s-demo.html sẵn sàng
-  function waitReady(cb) {
-    if (typeof pods !== 'undefined' && typeof render === 'function' &&
-        typeof totalRequests !== 'undefined') cb();
-    else setTimeout(() => waitReady(cb), 50);
-  }
-
-  waitReady(function() {
-    // ── SSE connection ──
-    const es = new EventSource('/events');
-    es.onmessage = function(ev) {
-      const d = JSON.parse(ev.data);
-      if (d.type === 'hello') {
-        window._srvLabel = d.label;
-        redisStatus = true;
-        log('☸ Redis connected — ' + d.label + ' | Shared state active', '#4ade80');
-        // Load total từ Redis ngay khi connect
-        _loadRedisState();
-      }
-      if (d.type === 'hit') {
-        // Đồng bộ total với Redis (tránh drift)
-        if (d.total > totalRequests) totalRequests = d.total;
-        document.getElementById('total-req').textContent = totalRequests.toLocaleString();
-      }
-      if (d.type === 'reset') {
-        window._srvLabel = d.myLabel;
-        // Gọi resetAll gốc (đã được override bên dưới, dùng bản gốc)
-        _origReset();
-        log('↺ Redis cleared — ' + d.myLabel + ' | Cluster restarted', '#38bdf8');
-      }
-    };
-    es.onerror = function() { /* tự reconnect */ };
-
-    // Load Redis state — luôn ghi đè totalRequests kể cả khi = 0
-    function _loadRedisState() {
-      fetch('/api/state').then(r=>r.json()).then(d => {
-        totalRequests = d.total || 0;
-        document.getElementById('total-req').textContent = totalRequests.toLocaleString();
-        render();
-      }).catch(()=>{});
-    }
-
-    // ── Lưu bản gốc để dùng trong SSE handler ──
-    const _origReset = window.resetAll;
-
-    // ── Override sendOneRequest: local + Redis ──
-    window.sendOneRequest = async function() {
-      const p = pickPod();
-      if (!p) { toast('Không có pod alive!','red',2000); return; }
-      p.hits++;
-      totalRequests++;
-      document.getElementById('total-req').textContent = totalRequests.toLocaleString();
-      log(' Request → ' + p.id + ' (total: ' + totalRequests + ', pod hits: ' + p.hits + ')', '#7dd3fc');
-      render();
-      // Ghi Redis bất đồng bộ
-      fetch('/api/hit', {method:'POST'}).catch(()=>{});
-    };
-
-    // ── Override sendBurst: local (fast) + Redis (sampled) ──
-    window.sendBurst = async function() {
-      const btn = document.querySelector('button[onclick="sendBurst()"]');
-      if (btn) { btn.disabled=true; btn.textContent='⚡ Đang gửi...'; }
-      log(' 100 requests (Flash Sale burst)...', '#fbbf24');
-      for (let i = 0; i < 100; i++) {
-        const p = pickPod();
-        if (!p) break;
-        p.hits++;
-        totalRequests++;
-        if (i % 10 === 0) {
-          document.getElementById('total-req').textContent = totalRequests.toLocaleString();
-          render();
-          await new Promise(r => setTimeout(r, 25));
-        }
-        // Ghi Redis mỗi 10 req
-        if (i % 10 === 0) fetch('/api/hit',{method:'POST'}).catch(()=>{});
-      }
-      document.getElementById('total-req').textContent = totalRequests.toLocaleString();
-      render();
-      log('100 requests xong! Total: ' + totalRequests, '#4ade80');
-      toast(' 100 requests phân phối đều vào '+pods.filter(p=>p.status==='alive').length+' Pods','green',3000);
-      if (btn) { btn.disabled=false; btn.textContent='⚡ Gửi 100 Requests'; }
-    };
-
-    // ── Override resetAll: xóa Redis rồi reset local ngay (không chờ SSE) ──
-    window.resetAll = async function() {
-      try {
-        await fetch('/api/reset', {method:'POST'});
-        _origReset(); // Gọi trực tiếp sau khi fetch xong
-      } catch(e) {
-        _origReset();
-        log('↺ Reset local (offline mode)', '#94a3b8');
-      }
-    };
-
-    // Auto-traffic trong Flash Sale cũng ghi Redis (sampled)
-    let _flashCount = 0;
-    const _origFlashInterval = setInterval(function() {
-      if (typeof scenario !== 'undefined' && scenario === 'flash') {
-        _flashCount++;
-        if (_flashCount % 10 === 0) {
-          fetch('/api/hit',{method:'POST'}).catch(()=>{});
-        }
-      }
-    }, 300);
-
-    _loadRedisState();
-  });
-})();
+hpaLog('INFO: minReplicas=3 maxReplicas=30 targetCPU=50%');
 </script>
 </body>
 </html>
-`;
-
-// ── HTTP Server ──────────────────────────────────────────────
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, "http://" + req.headers.host);
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  // ── Đo thời gian xử lý + đếm request cho MỌI route ──────────
-  // route dùng để gộp nhãn (label) tránh cardinality quá lớn
-  // (ví dụ /events không tính vì nó là kết nối stream dài hạn).
-  const routeLabel = url.pathname === "/" ? "/dashboard" : url.pathname;
-  const isStreamRoute = routeLabel === "/events";
-  const startNs = process.hrtime.bigint();
-  if (!isStreamRoute) {
-    res.on("finish", () => {
-      const durationSec = Number(process.hrtime.bigint() - startNs) / 1e9;
-      const labels = {
-        method: req.method,
-        route: routeLabel,
-        status: res.statusCode,
-      };
-      httpRequestsTotal.inc(labels);
-      responseTimeSeconds.observe(labels, durationSec);
-    });
-  }
-
-  // /metrics — endpoint để Prometheus scrape
-  if (url.pathname === "/metrics") {
-    try {
-      res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
-      res.end(await metricsRegistry.metrics());
-    } catch (e) {
-      res.writeHead(500);
-      res.end("# metrics error");
-    }
-    return;
-  }
-
-  // K8s liveness / readiness probe
-  if (
-    url.pathname === "/health" ||
-    url.pathname === "/ready" ||
-    url.pathname === "/live"
-  ) {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(
-      JSON.stringify({ ok: true, pod: POD_HOSTNAME, label: MY_LABEL }),
-    );
-  }
-
-  // SSE stream
-  if (url.pathname === "/events") {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    res.write(
-      "data: " +
-        JSON.stringify({ type: "hello", pod: POD_HOSTNAME, label: MY_LABEL }) +
-        "\n\n",
-    );
-    clients.add(res);
-    req.on("close", () => clients.delete(res));
-    return;
-  }
-
-  // /api/hit — ghi Redis, trả total
-  if (url.pathname === "/api/hit" && req.method === "POST") {
-    try {
-      const total = await store.incr("total_hits");
-      const podHits = await store.hIncrBy("pod_hits", POD_HOSTNAME, 1);
-      broadcast({ type: "hit", label: MY_LABEL, total, podHits });
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ total, label: MY_LABEL, podHits }));
-    } catch (e) {
-      res.writeHead(500);
-      res.end("{}");
-    }
-    return;
-  }
-
-  // /api/state — snapshot Redis
-  if (url.pathname === "/api/state") {
-    try {
-      const total = parseInt((await store.get("total_hits")) || 0);
-      const podHits = (await store.hGetAll("pod_hits")) || {};
-      const podLabels = (await store.hGetAll("pod_labels")) || {};
-      const hb = (await store.hGetAll("pod_hb")) || {};
-      const now = Date.now();
-      const alive = Object.entries(hb)
-        .filter(([, t]) => now - parseInt(t) < 8000)
-        .map(([h]) => h);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          total,
-          podHits,
-          podLabels,
-          alive,
-          myPod: POD_HOSTNAME,
-          myLabel: MY_LABEL,
-        }),
-      );
-    } catch (e) {
-      res.writeHead(500);
-      res.end("{}");
-    }
-    return;
-  }
-
-  // /api/crash-self — K8s tự restart pod
-  if (url.pathname === "/api/crash-self" && req.method === "POST") {
-    slog("CRASH SELF");
-    await store.hDel("pod_hb", POD_HOSTNAME).catch(() => {});
-    broadcast({ type: "pod_dead", label: MY_LABEL });
-    res.writeHead(200);
-    res.end("{}");
-    setTimeout(() => process.exit(1), 300);
-    return;
-  }
-
-  // /api/reset — xóa Redis, gán lại label
-  if (url.pathname === "/api/reset" && req.method === "POST") {
-    await store
-      .del([
-        "total_hits",
-        "pod_hits",
-        "pod_labels",
-        "pod_label_counter",
-        "pod_hb",
-      ])
-      .catch(() => {});
-    MY_LABEL = null;
-    await initLabel();
-    slog("RESET → " + MY_LABEL);
-    broadcast({ type: "reset", myLabel: MY_LABEL });
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, myLabel: MY_LABEL }));
-    return;
-  }
-
-  // Serve HTML
-  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  res.end(HTML);
-});
-
-server.listen(3000, () => slog("K8s Demo :3000"));

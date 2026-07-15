@@ -1,0 +1,130 @@
+# ═══════════════════════════════════════════════════════════════
+# prometheus-k8s.yaml — Triển khai Prometheus trên Minikube
+# ═══════════════════════════════════════════════════════════════
+# Gồm 4 resource, áp dụng theo thứ tự từ trên xuống:
+#   1. ServiceAccount + ClusterRole + ClusterRoleBinding (RBAC)
+#      -> cho phép Prometheus gọi Kubernetes API để tự tìm Pod
+#         (kubernetes_sd_configs trong prometheus.yml cần quyền này).
+#   2. ConfigMap  -> chứa nội dung file prometheus.yml
+#   3. Deployment -> chạy container prometheus
+#   4. Service    -> expose Prometheus UI (port 9090)
+
+# ─── 1. RBAC ─────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  # Prometheus cần "list/watch/get" Pod, Service, Endpoint để
+  # tự động phát hiện target scrape (service discovery).
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: default
+
+# ─── 2. ConfigMap chứa prometheus.yml ─────────────────────────────
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+
+    scrape_configs:
+      - job_name: "prometheus"
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      - job_name: "nodejs-counter"
+        metrics_path: /metrics
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["default"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: counter
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: "${1}:3000"
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+
+# ─── 3. Deployment ─────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1               # Chỉ cần 1 Pod cho mục đích demo
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus   # gắn quyền RBAC ở trên
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.53.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.retention.time=6h"   # demo: không cần lưu lâu
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/prometheus/
+      volumes:
+        - name: config-volume
+          configMap:
+            name: prometheus-config
+
+# ─── 4. Service ──────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+spec:
+  type: NodePort
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+      nodePort: 30090       # truy cập: minikube service prometheus-service
