@@ -320,7 +320,20 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .stat-item span{font-size:.78rem;color:var(--muted);}
 
 /* footer */
+.flash-sale-pill{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.18);font-size:.72rem;font-weight:700;color:#e2e8f0;}
+.flash-sale-pill.active{background:rgba(249,115,22,.18);border-color:rgba(249,115,22,.35);color:#fdba74;box-shadow:0 0 0 1px rgba(249,115,22,.16) inset;}
+.analytics-hero{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-bottom:14px;}
+.analytics-stat{background:linear-gradient(135deg,#ffffff 0%,#f8fafc 100%);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(15,23,42,.06);} 
+.analytics-stat .metric-value{font-size:1.7rem;}
+.analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}
+.chart-panel{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(15,23,42,.04);}
+.chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;}
+.chart-title{font-size:.95rem;font-weight:800;}
+.chart-legend{display:flex;align-items:center;gap:8px;font-size:.7rem;color:var(--muted);}
+.chart-dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+.chart-canvas{width:100%;height:280px;border-radius:12px;background:linear-gradient(180deg,#f8fafc 0%,#ffffff 100%);}
 .footer{text-align:center;padding:20px;font-size:.7rem;color:var(--muted);}
+@media(max-width:900px){.analytics-hero,.analytics-grid{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -359,7 +372,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
     <div class="traffic-bar"><div class="traffic-fill" id="traffic-fill" style="width:0%"></div></div>
     <div style="display:flex;justify-content:space-between;font-size:.62rem;color:#64748b;margin-top:3px;"><span>Bình thường</span><span>Flash Sale ⚡</span></div>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <div class="flash-sale-pill" id="flash-sale-pill">⏳ Flash sale: 01:00</div>
     <button class="btn btn-blue" onclick="setScenario('normal')">Bình Thường</button>
     <button class="btn btn-red" onclick="setScenario('flash')">⚡ Flash Sale</button>
     <button class="btn btn-gray" onclick="resetAll()">↺ Reset</button>
@@ -702,24 +716,53 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
       <div class="section-num" style="background:var(--green-bg);color:var(--green);">B</div>
       <div>
         <div class="section-title">Analytics</div>
-        <div class="section-sub">Biểu đồ theo thời gian cho request, CPU, memory và số pod</div>
+        <div class="section-sub">Biểu đồ theo thời gian cho request, CPU, memory và số pod, đã được làm mịn để giảm dao động</div>
       </div>
     </div>
-    <div class="chart-card">
-      <div class="chart-title">Requests theo thời gian</div>
-      <canvas id="chart-requests" class="chart-canvas"></canvas>
+    <div class="analytics-hero">
+      <div class="analytics-stat">
+        <div class="chart-title">Xu hướng thời gian thực</div>
+        <div class="metric-value" id="analytics-trend">Ổn định</div>
+        <div class="metric-sub">Tối ưu để dữ liệu nhìn mượt hơn và dễ theo dõi hơn</div>
+      </div>
+      <div class="analytics-stat">
+        <div class="chart-title">Mốc nhanh</div>
+        <div class="stat-list">
+          <div class="stat-item"><strong>Flash Sale</strong><span id="analytics-flash-state">Chưa kích hoạt</span></div>
+          <div class="stat-item"><strong>CPU hiện tại</strong><span id="analytics-cpu-state">8%</span></div>
+          <div class="stat-item"><strong>Pod đang chạy</strong><span id="analytics-pod-state">3</span></div>
+        </div>
+      </div>
     </div>
-    <div class="chart-card">
-      <div class="chart-title">CPU theo thời gian</div>
-      <canvas id="chart-cpu" class="chart-canvas"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Memory theo thời gian</div>
-      <canvas id="chart-mem" class="chart-canvas"></canvas>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Pod Count theo thời gian</div>
-      <canvas id="chart-pods" class="chart-canvas"></canvas>
+    <div class="analytics-grid">
+      <div class="chart-panel">
+        <div class="chart-head">
+          <div class="chart-title">Requests theo thời gian</div>
+          <div class="chart-legend"><span class="chart-dot" style="background:#2563eb"></span> Tốc độ</div>
+        </div>
+        <canvas id="chart-requests" class="chart-canvas"></canvas>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-head">
+          <div class="chart-title">CPU theo thời gian</div>
+          <div class="chart-legend"><span class="chart-dot" style="background:#16a34a"></span> Mức tải</div>
+        </div>
+        <canvas id="chart-cpu" class="chart-canvas"></canvas>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-head">
+          <div class="chart-title">Memory theo thời gian</div>
+          <div class="chart-legend"><span class="chart-dot" style="background:#7c3aed"></span> Bổ sung</div>
+        </div>
+        <canvas id="chart-mem" class="chart-canvas"></canvas>
+      </div>
+      <div class="chart-panel">
+        <div class="chart-head">
+          <div class="chart-title">Pod Count theo thời gian</div>
+          <div class="chart-legend"><span class="chart-dot" style="background:#ea580c"></span> Số pod</div>
+        </div>
+        <canvas id="chart-pods" class="chart-canvas"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -742,8 +785,12 @@ let stressIv = null, sdTimer = null, scaleIv = null;
 let healLock = false;
 let scenario = 'normal'; // 'normal' | 'flash'
 let trafficIv = null;
+let normalTrafficIv = null;
 let isRedisConnected = false;
 let redisStatus = false;
+let flashSaleTimer = null;
+let flashSaleActive = false;
+let flashSaleEndsAt = 0;
 
 const HISTORY_LENGTH = 24;
 const requestHistory = Array(HISTORY_LENGTH).fill(0);
@@ -752,6 +799,7 @@ const memHistory = Array(HISTORY_LENGTH).fill(120);
 const podHistory = Array(HISTORY_LENGTH).fill(3);
 let historyIndex = 0;
 let lastRequestCount = 0;
+let analyticsLastUpdate = 0;
 
 function nextNum() {
   for (let i = podCounter + 1; i <= 999; i++) {
@@ -836,8 +884,26 @@ function render() {
   updateHPAUI();
   updateAdminMetrics();
   updateAnalyticsHistory();
+  if (document.getElementById('page-analytics')?.classList.contains('active')) {
+    renderCharts();
+  }
   document.getElementById('total-req').textContent = totalRequests.toLocaleString();
   document.getElementById('pod-count-val').textContent = pods.filter(p=>p.status!=='dead').length;
+}
+
+function updateFlashSaleBanner() {
+  const pill = document.getElementById('flash-sale-pill');
+  if (!pill) return;
+  if (!flashSaleActive || !flashSaleEndsAt) {
+    pill.textContent = '⏳ Flash sale: 01:00';
+    pill.className = 'flash-sale-pill';
+    return;
+  }
+  const remain = Math.max(0, Math.ceil((flashSaleEndsAt - Date.now()) / 1000));
+  const mm = String(Math.floor(remain / 60)).padStart(2, '0');
+  const ss = String(remain % 60).padStart(2, '0');
+  pill.textContent = '⏳ Flash sale: ' + mm + ':' + ss;
+  pill.className = 'flash-sale-pill active';
 }
 
 function updateAdminMetrics() {
@@ -851,6 +917,10 @@ function updateAdminMetrics() {
   document.getElementById('admin-status').textContent = 'Healthy';
   document.getElementById('admin-redis-heartbeat').textContent = redisStatus ? 'Live' : 'Down';
   document.getElementById('admin-pod-count').textContent = aliveCount;
+  document.getElementById('analytics-flash-state').textContent = scenario === 'flash' ? 'Đang chạy 1 phút' : 'Chưa kích hoạt';
+  document.getElementById('analytics-cpu-state').textContent = Math.round(hpaCpu) + '%';
+  document.getElementById('analytics-pod-state').textContent = aliveCount;
+  document.getElementById('analytics-trend').textContent = scenario === 'flash' ? 'Tăng trưởng mạnh' : 'Ổn định';
 }
 
 function showPage(page) {
@@ -863,14 +933,29 @@ function showPage(page) {
   if (page === 'analytics') renderCharts();
 }
 
-function updateAnalyticsHistory() {
+function updateAnalyticsHistory(force = false) {
+  const now = Date.now();
+  if (!force && now - analyticsLastUpdate < 1000) return;
+  analyticsLastUpdate = now;
   const aliveCount = pods.filter(p=>p.status!=='dead').length;
-  requestHistory[historyIndex] = Math.max(0, totalRequests - lastRequestCount);
-  cpuHistory[historyIndex] = Math.round(hpaCpu);
+  const delta = Math.max(0, totalRequests - lastRequestCount);
+  const prev = requestHistory[(historyIndex - 1 + HISTORY_LENGTH) % HISTORY_LENGTH] || 0;
+  requestHistory[historyIndex] = Math.max(0, Math.round(prev * 0.55 + delta * 0.45));
+  const prevCpu = cpuHistory[(historyIndex - 1 + HISTORY_LENGTH) % HISTORY_LENGTH] || hpaCpu;
+  cpuHistory[historyIndex] = Math.round(prevCpu * 0.6 + hpaCpu * 0.4);
   memHistory[historyIndex] = 120 + aliveCount * 8;
   podHistory[historyIndex] = aliveCount;
   lastRequestCount = totalRequests;
   historyIndex = (historyIndex + 1) % HISTORY_LENGTH;
+}
+
+function smoothSeries(values) {
+  const size = Math.max(3, Math.min(7, Math.round(values.length / 6)));
+  return values.map((value, index) => {
+    const start = Math.max(0, index - size + 1);
+    const slice = values.slice(start, index + 1);
+    return slice.reduce((sum, item) => sum + item, 0) / slice.length;
+  });
 }
 
 function drawLineChart(canvasId, data, color, title) {
@@ -887,8 +972,9 @@ function drawLineChart(canvasId, data, color, title) {
   const padding = 32;
   const innerW = width - padding * 2;
   const innerH = height - padding * 2;
-  const max = Math.max(...data, 1);
-  const min = Math.min(...data, 0);
+  const series = smoothSeries(data);
+  const max = Math.max(...series, 1);
+  const min = Math.min(...series, 0);
   const range = Math.max(max - min, 1);
   ctx.strokeStyle = '#e2e8f0';
   ctx.lineWidth = 1;
@@ -899,22 +985,37 @@ function drawLineChart(canvasId, data, color, title) {
     ctx.lineTo(width - padding, y);
     ctx.stroke();
   }
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
+  const gradient = ctx.createLinearGradient(0, padding, 0, height - padding);
+  gradient.addColorStop(0, color + '33');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.beginPath();
-  data.forEach((value, idx) => {
-    const x = padding + (innerW * idx) / Math.max(data.length - 1, 1);
+  series.forEach((value, idx) => {
+    const x = padding + (innerW * idx) / Math.max(series.length - 1, 1);
+    const y = padding + innerH * (1 - (value - min) / range);
+    if (idx === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(width - padding, height - padding);
+  ctx.lineTo(padding, height - padding);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  series.forEach((value, idx) => {
+    const x = padding + (innerW * idx) / Math.max(series.length - 1, 1);
     const y = padding + innerH * (1 - (value - min) / range);
     if (idx === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
   ctx.fillStyle = color;
-  data.forEach((value, idx) => {
-    const x = padding + (innerW * idx) / Math.max(data.length - 1, 1);
+  series.forEach((value, idx) => {
+    const x = padding + (innerW * idx) / Math.max(series.length - 1, 1);
     const y = padding + innerH * (1 - (value - min) / range);
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.arc(x, y, 3.2, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.fillStyle = '#0f172a';
@@ -922,7 +1023,7 @@ function drawLineChart(canvasId, data, color, title) {
   ctx.fillText(title, padding, 22);
   ctx.fillStyle = '#64748b';
   ctx.font = '600 11px system-ui';
-  ctx.fillText('min: ' + min + ' max: ' + max, padding, height - 12);
+  ctx.fillText('min: ' + Math.round(min) + ' max: ' + Math.round(max), padding, height - 12);
 }
 
 function renderCharts() {
@@ -1015,6 +1116,16 @@ function renderDesiredState() {
   document.getElementById('yaml-replicas').textContent = pods.filter(p=>p.status!=='dead').length;
 }
 
+function getHpaPhaseLabel(phase) {
+  const map = {
+    idle: 'BÌNH THƯỜNG',
+    scaling_up: 'ĐANG TĂNG',
+    max: 'ĐẠT TỐI ĐA',
+    scaling_down: 'ĐANG GIẢM',
+  };
+  return map[phase] || phase;
+}
+
 function updateHPAUI() {
   const rep = pods.filter(p=>p.status!=='dead').length;
   document.getElementById('hpa-rep-big').textContent = rep;
@@ -1027,10 +1138,9 @@ function updateHPAUI() {
   cpuFill.style.background = cpu>70?'var(--red)':cpu>50?'var(--orange)':'var(--green)';
   document.getElementById('cpu-pct').textContent = cpu+'%';
 
-  const phaseMap = {idle:'IDLE',scaling_up:'SCALE UP ↑',max:'MAX ('+MAX_PODS+')',scaling_down:'SCALE DOWN ↓'};
   const clsMap   = {idle:'tag-green',scaling_up:'tag-orange',max:'tag-red',scaling_down:'tag-purple'};
   const noteMap  = {idle:'Hệ thống bình thường | CPU thấp',scaling_up:'⬆ Đang thêm Pod! CPU cao',max:'🚀 Đạt max '+MAX_PODS+' Pods',scaling_down:'⬇ Thu hồi Pod thừa | CPU giảm'};
-  document.getElementById('hpa-phase-tag').textContent = phaseMap[hpaPhase]||hpaPhase;
+  document.getElementById('hpa-phase-tag').textContent = getHpaPhaseLabel(hpaPhase);
   document.getElementById('hpa-phase-tag').className = 'tag '+(clsMap[hpaPhase]||'tag-green');
   document.getElementById('hpa-note').textContent = noteMap[hpaPhase]||'';
 }
@@ -1041,7 +1151,13 @@ function updateHPAUI() {
 function setScenario(s) {
   scenario = s;
   clearInterval(trafficIv);
+  clearTimeout(flashSaleTimer);
+  flashSaleActive = false;
+  flashSaleEndsAt = 0;
   if (s === 'flash') {
+    flashSaleActive = true;
+    flashSaleEndsAt = Date.now() + 60000;
+    clearInterval(normalTrafficIv);
     toast('⚡ Flash Sale bắt đầu! Traffic tăng đột biến...', 'orange', 4000);
     log('⚡ FLASH SALE! Lưu lượng tăng đột biến', '#fb923c');
     let rps = 0;
@@ -1050,13 +1166,23 @@ function setScenario(s) {
       document.getElementById('rps-val').textContent = Math.round(rps).toLocaleString();
       document.getElementById('traffic-fill').style.width = Math.min(100, rps/500)+'%';
     }, 500);
-    // auto stress
+    flashSaleTimer = setTimeout(() => {
+      if (scenario === 'flash') {
+        setScenario('normal');
+        log('⏰ Flash Sale kết thúc sau 1 phút — quay về trạng thái bình thường', '#38bdf8');
+        toast('⏰ Flash Sale đã kết thúc', 'blue', 3000);
+      }
+    }, 60000);
     setTimeout(startStress, 1000);
   } else {
+    clearInterval(trafficIv);
+    startNormalTraffic();
+    stopStress(true);
     document.getElementById('rps-val').textContent = '0';
     document.getElementById('traffic-fill').style.width = '0%';
     log('📉 Traffic trở về bình thường', '#38bdf8');
   }
+  updateFlashSaleBanner();
 }
 
 // ════════════════════════════════════════════════
@@ -1164,9 +1290,17 @@ function startStress() {
   }, 1000);
 }
 
-function stopStress() {
+function stopStress(keepPods = false) {
   clearInterval(stressIv); stressIv = null;
   document.getElementById('stop-stress-btn').disabled = true;
+  if (keepPods) {
+    hpaPhase = 'idle';
+    hpaCpu = Math.max(8, Math.round(hpaCpu * 0.8));
+    hpaLog('INFO: Flash sale ended — keeping current pod count stable');
+    log('⏹ Stress dừng — pod giữ nguyên mức cao', '#94a3b8');
+    render();
+    return;
+  }
   log('⏹ Stress dừng — CPU đang giảm...', '#94a3b8');
   hpaLog('INFO: Stress stopped — CPU cooling down');
   // gradually cool down
@@ -1315,10 +1449,13 @@ function manualDelete() {
 function resetAll() {
   clearInterval(stressIv); stressIv = null;
   clearInterval(trafficIv); trafficIv = null;
+  clearInterval(normalTrafficIv); normalTrafficIv = null;
   clearTimeout(sdTimer); sdTimer = null;
+  clearTimeout(flashSaleTimer); flashSaleTimer = null;
   healLock = false;
   hpaCpu = 8; hpaPhase = 'idle';
   totalRequests = 0; rrIndex = 0; scenario = 'normal';
+  flashSaleActive = false; flashSaleEndsAt = 0;
   initPods();
   document.getElementById('rps-val').textContent = '0';
   document.getElementById('traffic-fill').style.width = '0%';
@@ -1337,6 +1474,17 @@ function resetAll() {
 // ════════════════════════════════════════════════
 function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
 
+function startNormalTraffic() {
+  clearInterval(normalTrafficIv);
+  normalTrafficIv = setInterval(() => {
+    if (scenario !== 'flash') {
+      const p = pickPod();
+      if (p) { p.hits++; totalRequests++; }
+      render();
+    }
+  }, 1200);
+}
+
 // ── Auto-traffic when Flash Sale ──
 setInterval(() => {
   if (scenario === 'flash') {
@@ -1347,6 +1495,14 @@ setInterval(() => {
     render();
   }
 }, 300);
+setInterval(() => {
+  if (document.getElementById('page-analytics')?.classList.contains('active')) {
+    updateAnalyticsHistory(true);
+    render();
+  }
+}, 1000);
+setInterval(updateFlashSaleBanner, 250);
+startNormalTraffic();
 
 // ── Initial render ──
 render();
