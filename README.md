@@ -247,10 +247,3 @@ Dùng `minikube stop` để tạm dừng cluster và giữ lại cho lần sau, 
 
 ---
 
-## 11. Ghi chú thiết kế
-
-Tất cả trạng thái chia sẻ giữa các Pod (đếm request, heartbeat, nhãn Pod, log sự kiện, số liệu Simulation Summary) đều nằm trong Redis, vì mỗi Pod là một tiến trình Node.js độc lập, không tự chia sẻ biến RAM với Pod khác.
-
-Prometheus dùng service discovery (`kubernetes_sd_configs`, role pod) nên khi HPA scale từ 3 lên 10 Pod, Prometheus tự thêm target mới, không cần sửa cấu hình tay.
-
-Grafana được provisioning sẵn (datasource và dashboard nạp tự động khi container khởi động) để buổi thuyết trình không phải cấu hình tay qua UI.
