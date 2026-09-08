@@ -242,8 +242,8 @@ Dùng `minikube stop` để tạm dừng cluster và giữ lại cho lần sau, 
 | HPA không scale dù CPU cao | metrics-server chưa bật, hoặc thiếu `resources.requests.cpu` trong `counter.yaml` | Bật `minikube addons enable metrics-server`; kiểm tra lại `counter.yaml` |
 | Prometheus Target nodejs-counter không lên UP | Thiếu annotation `prometheus.io/scrape` trên Pod, hoặc RBAC chưa đủ quyền | Kiểm tra `counter.yaml` có annotation; kiểm tra `kubectl get clusterrolebinding prometheus` tồn tại |
 | Grafana không có Dashboard Kubernetes Simulator | ConfigMap `grafana-dashboards` chưa tạo hoặc tạo sai thời điểm | Xem lại Bước 5; chạy `kubectl rollout restart deployment grafana` sau khi tạo ConfigMap |
-| Panel Grafana No data dù Target Prometheus đã UP | Tên metric trong `server.js` không khớp PromQL trong dashboard | Xem bảng ở Mục 7 |
 
 
----
+
+
 
