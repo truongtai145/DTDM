@@ -157,7 +157,7 @@ kubectl top pods
 
 `kubectl get pods` phải thấy `redis`, `counter-deployment` (x3), `prometheus`, `grafana` đều `Running`. `kubectl top pods` cần metrics-server đã bật ở Bước 1 mới có số liệu.
 
-Mở Prometheus UI, vào mục Status rồi Targets: job `nodejs-counter` phải có đủ số dòng bằng số Pod counter đang chạy, trạng thái UP — đây là bằng chứng Prometheus đã tự phát hiện Pod qua `kubernetes_sd_configs`.
+
 
 ---
 
