@@ -234,14 +234,6 @@ Dùng `minikube stop` để tạm dừng cluster và giữ lại cho lần sau, 
 
 ---
 
-## 10. Xử lý sự cố thường gặp
-
-| Triệu chứng | Nguyên nhân thường gặp | Cách xử lý |
-|---|---|---|
-| `kubectl top pods` báo metrics not available yet | metrics-server vừa bật, chưa kịp thu thập | Đợi 1-2 phút rồi chạy lại |
-| HPA không scale dù CPU cao | metrics-server chưa bật, hoặc thiếu `resources.requests.cpu` trong `counter.yaml` | Bật `minikube addons enable metrics-server`; kiểm tra lại `counter.yaml` |
-
-
 
 
 
