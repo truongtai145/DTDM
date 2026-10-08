@@ -230,9 +230,7 @@ kubectl delete -f k8s/redis.yaml
 minikube stop
 ```
 
-Dùng `minikube stop` để tạm dừng cluster và giữ lại cho lần sau, hoặc `minikube delete` để xoá hẳn.
 
----
 
 
 
